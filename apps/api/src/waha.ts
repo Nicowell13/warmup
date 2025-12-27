@@ -25,6 +25,11 @@ async function wahaRequestJson(path: string, init: RequestInit = {}) {
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
+    if (res.status === 401) {
+      throw new Error(
+        `WAHA request failed: 401 Unauthorized. Pastikan API key WAHA sudah diset (env WAHA_API_KEY di service waha + api, header X-Api-Key). ${body}`
+      );
+    }
     throw new Error(`WAHA request failed: ${res.status} ${res.statusText} ${body}`);
   }
 
