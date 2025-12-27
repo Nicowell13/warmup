@@ -36,9 +36,12 @@ Aplikasi akan auto-reply **berdasarkan nama session** yang datang di payload web
 - `docker compose up --build`
 
 Service:
-- Web: http://localhost:3000
-- API: http://localhost:4000
+- Web: http://localhost:4000
+- API: http://localhost:4001
 - WAHA: http://localhost:3001
+
+Catatan:
+- Web melakukan request ke API lewat path yang sama-origin: `/api/...` (dipoxy oleh Next.js ke service API).
 
 ## Catatan WAHA API
 Implementasi `sendText` ada di [apps/api/src/waha.ts](apps/api/src/waha.ts) dan memakai endpoint:
