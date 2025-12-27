@@ -23,6 +23,10 @@ async function wahaRequestJson(path: string, init: RequestInit = {}) {
     }),
   });
 
+  if (res.status === 204) {
+    return {};
+  }
+
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     if (res.status === 401) {
@@ -148,6 +152,16 @@ export async function wahaListSessions(all = true) {
   const query = all ? '?all=true' : '';
   return wahaRequestJson(`/api/sessions${query}`, {
     method: 'GET',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+}
+
+// Docs: DELETE /api/sessions/{session}
+export async function wahaDeleteSession(session: string) {
+  return wahaRequestJson(`/api/sessions/${encodeURIComponent(session)}`, {
+    method: 'DELETE',
     headers: {
       Accept: 'application/json',
     },

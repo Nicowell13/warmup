@@ -7,7 +7,7 @@ import { DateTime } from 'luxon';
 
 import { db } from './db.js';
 import { requireAuth, signToken, verifyAdminPassword } from './auth.js';
-import { wahaGetQrBase64, wahaRequestPairingCode, wahaSendText, wahaStartSession } from './waha.js';
+import { wahaDeleteSession, wahaGetQrBase64, wahaRequestPairingCode, wahaSendText, wahaStartSession } from './waha.js';
 import { pickRandom, pickReplyFromScript } from './script.js';
 import { startScheduler } from './scheduler.js';
 
@@ -227,11 +227,30 @@ app.patch('/sessions/:id', requireAuth, (req, res) => {
 });
 
 app.delete('/sessions/:id', requireAuth, (req, res) => {
-  const ok = db.deleteSession(req.params.id);
-  if (!ok) {
+  const existing = db.getSessionById(req.params.id);
+  if (!existing) {
     return res.status(404).json({ error: 'Not found' });
   }
-  return res.status(204).send();
+
+  // Delete WAHA session first so UI delete mirrors WAHA delete behavior.
+  // Ignore 404 from WAHA (already deleted), but surface other errors.
+  return (async () => {
+    try {
+      await wahaDeleteSession(existing.wahaSession);
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      const notFound = msg.includes('404') || msg.toLowerCase().includes('not found');
+      if (!notFound) {
+        return res.status(502).json({ error: e?.message || 'WAHA error' });
+      }
+    }
+
+    const ok = db.deleteSession(req.params.id);
+    if (!ok) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    return res.status(204).send();
+  })();
 });
 
 // Automation: jadwalkan pesan otomatis per hari (08-22) dengan target messages per NEW.
