@@ -35,6 +35,9 @@ Aplikasi akan auto-reply **berdasarkan nama session** yang datang di payload web
 ## Jalankan via Docker
 - `docker compose up --build`
 
+Jika popup QR/Pairing menampilkan error `WAHA request failed: 401 Unauthorized`, berarti WAHA Anda mengaktifkan API key.
+Set env `WAHA_API_KEY` di service `waha` dan `api` pada [docker-compose.yml](docker-compose.yml) (nilainya harus sama).
+
 Service:
 - Web: http://localhost:4000
 - API: http://localhost:4001

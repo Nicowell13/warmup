@@ -7,6 +7,8 @@ services:
       # IMPORTANT: adjust for WAHA Plus features if you use Plus.
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
       - WAHA_LOG_LEVEL=info
+      # If your WAHA requires API key (401 Unauthorized without it), set it here
+      - WAHA_API_KEY=change_me_in_production
       # Webhook destination (API will expose /waha/webhook/:sessionName)
       - WAHA_WEBHOOK_URL=http://api:4000/waha/webhook
     ports:
@@ -20,11 +22,13 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - JWT_SECRET=change_me_in_production
+      - JWT_SECRET=63aeedb737cd1470c76cf13c5dfd5a37f06b2c44a8174c98fbd0a78d5df973f23a3a565bbab66817b0fa0558a2e2e671313bca3a23ffe6b13f8a40a9251d6260
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin
       - DATABASE_URL=file:/data/app.db
       - WAHA_BASE_URL=http://waha:3000
+      # Must match WAHA service key if enabled
+      - WAHA_API_KEY=2b0f9b8281f541d0b25cf3b76d81615a
     volumes:
       - api-data:/data
     ports:
