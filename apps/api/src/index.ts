@@ -154,6 +154,55 @@ app.post('/sessions', requireAuth, (req, res) => {
   return res.status(201).json({ session: created });
 });
 
+app.post('/sessions/bulk', requireAuth, (req, res) => {
+  const bulkSchema = z.object({
+    wahaSessions: z.array(z.string().min(1)).min(1),
+    cluster: z.enum(['old', 'new']).optional().default('old'),
+    autoReplyEnabled: z.boolean().optional().default(false),
+    autoReplyMode: z.enum(['static', 'script']).optional().default('static'),
+    scriptLineParity: z.enum(['odd', 'even', 'all']).optional().default('odd'),
+    autoReplyText: z.string().optional().default('Terima kasih, pesan Anda sudah kami terima.'),
+    autoReplyScriptText: z.string().optional().default(''),
+  });
+
+  const parsed = bulkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  const normalized = Array.from(
+    new Set(parsed.data.wahaSessions.map((s) => s.trim()).filter(Boolean))
+  );
+  if (normalized.length === 0) {
+    return res.status(400).json({ error: 'wahaSessions kosong' });
+  }
+
+  const created: any[] = [];
+  const skipped: Array<{ wahaSession: string; reason: string }> = [];
+  for (const wahaSession of normalized) {
+    if (db.getSessionByName(wahaSession)) {
+      skipped.push({ wahaSession, reason: 'exists' });
+      continue;
+    }
+
+    const s = db.upsertSession({
+      id: randomUUID(),
+      wahaSession,
+      cluster: parsed.data.cluster,
+      autoReplyEnabled: parsed.data.autoReplyEnabled,
+      autoReplyMode: parsed.data.autoReplyMode,
+      scriptLineParity: parsed.data.scriptLineParity,
+      autoReplyText: parsed.data.autoReplyText,
+      autoReplyScriptText: parsed.data.autoReplyScriptText,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    created.push(s);
+  }
+
+  return res.status(201).json({ ok: true, createdCount: created.length, skippedCount: skipped.length, created, skipped });
+});
+
 app.patch('/sessions/:id', requireAuth, (req, res) => {
   const existing = db.getSessionById(req.params.id);
   if (!existing) {

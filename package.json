@@ -5,10 +5,10 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev -w @app/api ; npm run dev -w @app/web",
+    "dev": "npm run dev -w @app/api && npm run dev -w @app/web",
     "dev:api": "npm run dev -w @app/api",
     "dev:web": "npm run dev -w @app/web",
-    "build": "npm run build -w @app/api ; npm run build -w @app/web",
-    "start": "npm run start -w @app/api ; npm run start -w @app/web"
+    "build": "npm run build -w @app/api && npm run build -w @app/web",
+    "start": "npm run start -w @app/api && npm run start -w @app/web"
   }
 }
