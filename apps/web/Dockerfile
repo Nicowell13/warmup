@@ -5,6 +5,10 @@ RUN npm install
 
 FROM node:20-alpine AS build
 WORKDIR /app
+ARG API_INTERNAL_BASE_URL
+ARG NEXT_PUBLIC_API_BASE_URL
+ENV API_INTERNAL_BASE_URL=$API_INTERNAL_BASE_URL
+ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN mkdir -p public && npm run build
