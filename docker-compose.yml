@@ -1,0 +1,49 @@
+services:
+  waha:
+    image: devlikeapro/waha-plus:latest
+    container_name: waha
+    restart: unless-stopped
+    environment:
+      # IMPORTANT: adjust for WAHA Plus features if you use Plus.
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      - WAHA_LOG_LEVEL=info
+      # Webhook destination (API will expose /waha/webhook/:sessionName)
+      - WAHA_WEBHOOK_URL=http://api:4000/waha/webhook
+    ports:
+      - "3001:3000" # WAHA UI/API (host:container)
+
+  api:
+    build:
+      context: ./apps/api
+    container_name: app-api
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - JWT_SECRET=change_me_in_production
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin
+      - DATABASE_URL=file:/data/app.db
+      - WAHA_BASE_URL=http://waha:3000
+    volumes:
+      - api-data:/data
+    ports:
+      - "4000:4000"
+    depends_on:
+      - waha
+
+  web:
+    build:
+      context: ./apps/web
+    container_name: app-web
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  api-data:
