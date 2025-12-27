@@ -41,6 +41,44 @@ async function wahaRequestJson(path: string, init: RequestInit = {}) {
   return res.json().catch(() => ({}));
 }
 
+async function wahaCreateSession(name: string, start = true) {
+  // Docs: POST /api/sessions
+  // By default, WAHA starts right after creation; we can also set { start: false }.
+  return wahaRequestJson('/api/sessions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ name, start }),
+  });
+}
+
+async function wahaDeprecatedStart(name: string) {
+  // Docs (DEPRECATED): POST /api/sessions/start
+  // Create (if not exists), Update (if existed), and Start.
+  return wahaRequestJson('/api/sessions/start', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify({ name }),
+  });
+}
+
+async function wahaEnsureSessionExists(name: string) {
+  // If WAHA session doesn't exist, POST /api/sessions/{name}/start will return 404.
+  // Create it first (idempotent-ish: if exists, WAHA will likely respond with 409).
+  try {
+    await wahaCreateSession(name, true);
+  } catch (e: any) {
+    const msg = String(e?.message || '');
+    const alreadyExists = msg.includes('409') || msg.toLowerCase().includes('already exists');
+    if (!alreadyExists) throw e;
+  }
+}
+
 export async function wahaSendText({ session, chatId, text }: WahaSendTextParams) {
   // NOTE: Some WAHA versions use other endpoints.
   // If your WAHA uses the newer per-session send API, we can switch this.
@@ -77,12 +115,32 @@ export async function wahaRequestPairingCode(session: string, phoneNumber: strin
 
 // Docs: POST /api/sessions/{session}/start
 export async function wahaStartSession(session: string) {
-  return wahaRequestJson(`/api/sessions/${encodeURIComponent(session)}/start`, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-    },
-  });
+  // New WAHA API requires you to create session first.
+
+  // Prefer granular API: create (no start) -> start
+  try {
+    await wahaCreateSession(session, false);
+  } catch (e: any) {
+    const msg = String(e?.message || '');
+    const alreadyExists = msg.includes('409') || msg.toLowerCase().includes('already exists');
+    if (!alreadyExists) throw e;
+  }
+
+  try {
+    return await wahaRequestJson(`/api/sessions/${encodeURIComponent(session)}/start`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+  } catch (e: any) {
+    const msg = String(e?.message || '');
+    const notFound = msg.includes('404') || msg.toLowerCase().includes('session not found');
+    if (!notFound) throw e;
+
+    // Fallback for builds that rely on older endpoint
+    return wahaDeprecatedStart(session);
+  }
 }
 
 // Docs: GET /api/sessions?all=true
