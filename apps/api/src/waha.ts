@@ -27,10 +27,15 @@ async function wahaRequestJson(path: string, init: RequestInit = {}) {
     const body = await res.text().catch(() => '');
     if (res.status === 401) {
       throw new Error(
-        `WAHA request failed: 401 Unauthorized. Pastikan API key WAHA sudah diset (env WAHA_API_KEY di service waha + api, header X-Api-Key). ${body}`
+        `WAHA request failed: 401 Unauthorized (${path}). Pastikan API key WAHA sudah diset (env WAHA_API_KEY di service waha + api, header X-Api-Key). ${body}`
       );
     }
-    throw new Error(`WAHA request failed: ${res.status} ${res.statusText} ${body}`);
+    if (res.status === 404) {
+      throw new Error(
+        `WAHA request failed: 404 Not Found (${path}). Ini biasanya terjadi jika session belum terbentuk/siap atau endpoint WAHA berbeda dari yang diharapkan. ${body}`
+      );
+    }
+    throw new Error(`WAHA request failed: ${res.status} ${res.statusText} (${path}) ${body}`);
   }
 
   return res.json().catch(() => ({}));

@@ -157,11 +157,33 @@ export default function SessionsPage() {
 
     setAuthBusy(true);
     try {
-      await startWahaSession(sessionName);
-      const qrData = await fetchQr(sessionName);
-      setQr(qrData);
-    } catch (e) {
-      setAuthError(e?.message || 'Gagal start/ambil QR');
+      try {
+        await startWahaSession(sessionName);
+      } catch (e) {
+        setAuthError(`Start session gagal: ${e?.message || 'Unknown error'}`);
+        return;
+      }
+
+      // WAHA kadang butuh jeda setelah start sebelum QR tersedia
+      let lastErr = null;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          const qrData = await fetchQr(sessionName);
+          setQr(qrData);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          const msg = String(e?.message || '');
+          const retriable = msg.includes('404') || msg.toLowerCase().includes('session not found');
+          if (!retriable) break;
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+
+      if (lastErr && !qr) {
+        setAuthError(`Ambil QR gagal: ${lastErr?.message || 'Unknown error'}`);
+      }
     } finally {
       setAuthBusy(false);
     }
@@ -174,8 +196,22 @@ export default function SessionsPage() {
     setQr(null);
     try {
       await startWahaSession(authSessionName);
-      const qrData = await fetchQr(authSessionName);
-      setQr(qrData);
+      let lastErr = null;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        try {
+          const qrData = await fetchQr(authSessionName);
+          setQr(qrData);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          const msg = String(e?.message || '');
+          const retriable = msg.includes('404') || msg.toLowerCase().includes('session not found');
+          if (!retriable) break;
+          await new Promise((r) => setTimeout(r, 800));
+        }
+      }
+      if (lastErr) setAuthError(`Ambil QR gagal: ${lastErr?.message || 'Unknown error'}`);
     } catch (e) {
       setAuthError(e?.message || 'Gagal ambil QR');
     } finally {
