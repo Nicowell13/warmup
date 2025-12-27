@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, getApiBaseUrl } from '../../../lib/api';
 import { getToken } from '../../../lib/auth';
 
@@ -17,17 +17,12 @@ export default function SessionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const [newSessionName, setNewSessionName] = useState('');
-  const [newCluster, setNewCluster] = useState('old');
-  const [newAutoReplyEnabled, setNewAutoReplyEnabled] = useState(false);
-  const [newAutoReplyMode, setNewAutoReplyMode] = useState('script');
-  const [newScriptLineParity, setNewScriptLineParity] = useState('odd');
-  const [newAutoReplyText, setNewAutoReplyText] = useState('Terima kasih, pesan Anda sudah kami terima.');
-  const [newAutoReplyScriptText, setNewAutoReplyScriptText] = useState('');
+  const MAX_SESSIONS = 3;
+  const canCreateMore = sessions.length < MAX_SESSIONS;
 
-  const [bulkSessionNamesText, setBulkSessionNamesText] = useState('');
-  const [bulkCreating, setBulkCreating] = useState(false);
-  const [bulkResult, setBulkResult] = useState(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newSessionName, setNewSessionName] = useState('');
+  const nameInputRef = useRef(null);
 
   const webhookUrl = useMemo(() => `${getApiBaseUrl()}/waha/webhook`, []);
 
@@ -53,8 +48,7 @@ export default function SessionsPage() {
     loadSessions(token);
   }, [token]);
 
-  async function onCreateSession(e) {
-    e.preventDefault();
+  async function onCreateSession() {
     setError('');
     try {
       await apiFetch('/sessions', {
@@ -62,55 +56,33 @@ export default function SessionsPage() {
         method: 'POST',
         body: {
           wahaSession: newSessionName,
-          cluster: newCluster,
-          autoReplyEnabled: newAutoReplyEnabled,
-          autoReplyMode: newAutoReplyMode,
-          scriptLineParity: newScriptLineParity,
-          autoReplyText: newAutoReplyText,
-          autoReplyScriptText: newAutoReplyScriptText,
         },
       });
       setNewSessionName('');
+      setCreateOpen(false);
       await loadSessions(token);
     } catch (e2) {
       setError(e2?.message || 'Gagal membuat session');
     }
   }
 
-  async function onBulkCreateSessions(e) {
-    e.preventDefault();
-    setError('');
-    setBulkResult(null);
+  useEffect(() => {
+    if (!createOpen) return;
 
-    const wahaSessions = parseLines(bulkSessionNamesText);
-    if (wahaSessions.length === 0) {
-      setError('Masukkan minimal 1 nama session.');
-      return;
+    const t = setTimeout(() => {
+      nameInputRef.current?.focus?.();
+    }, 0);
+
+    function onKeyDown(e) {
+      if (e.key === 'Escape') setCreateOpen(false);
     }
 
-    setBulkCreating(true);
-    try {
-      const data = await apiFetch('/sessions/bulk', {
-        token,
-        method: 'POST',
-        body: {
-          wahaSessions,
-          cluster: newCluster,
-          autoReplyEnabled: newAutoReplyEnabled,
-          autoReplyMode: newAutoReplyMode,
-          scriptLineParity: newScriptLineParity,
-          autoReplyText: newAutoReplyText,
-          autoReplyScriptText: newAutoReplyScriptText,
-        },
-      });
-      setBulkResult(data);
-      await loadSessions(token);
-    } catch (e2) {
-      setError(e2?.message || 'Gagal bulk create');
-    } finally {
-      setBulkCreating(false);
-    }
-  }
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [createOpen]);
 
   async function onSaveSession(sessionId, patch) {
     setError('');
@@ -135,14 +107,27 @@ export default function SessionsPage() {
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border bg-white p-5">
-        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-xl font-semibold">Sessions</h1>
+            <h1 className="text-xl font-semibold">WhatsApp Sessions</h1>
             <p className="mt-1 text-sm text-gray-600">Kelola banyak nomor/season WAHA dan konfigurasi auto-reply.</p>
           </div>
-          <div className="mt-3 sm:mt-0">
-            <div className="text-xs text-gray-500">Webhook URL</div>
-            <div className="mt-1 rounded-lg bg-gray-50 px-3 py-2 text-xs font-mono text-gray-800">{webhookUrl}</div>
+          <div className="flex flex-col items-start gap-3 sm:items-end">
+            <button
+              disabled={!canCreateMore}
+              onClick={() => {
+                setError('');
+                setCreateOpen(true);
+              }}
+              className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              + New Session
+            </button>
+
+            <div className="w-full sm:w-auto">
+              <div className="text-xs text-gray-500">Webhook URL</div>
+              <div className="mt-1 rounded-lg bg-gray-50 px-3 py-2 text-xs font-mono text-gray-800">{webhookUrl}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -151,147 +136,7 @@ export default function SessionsPage() {
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <section className="rounded-2xl border bg-white p-5">
-          <h2 className="text-base font-semibold">Buat session</h2>
-          <p className="mt-1 text-sm text-gray-600">Buat satu session atau bulk (mis. 12 session) dengan setting yang sama.</p>
-
-          <form onSubmit={onCreateSession} className="mt-4 space-y-4">
-            <div>
-              <label className="text-sm font-medium text-gray-700">Nama session (WAHA)</label>
-              <input
-                value={newSessionName}
-                onChange={(e) => setNewSessionName(e.target.value)}
-                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/20"
-                placeholder="contoh: season-1"
-              />
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <label className="text-sm font-medium text-gray-700">Cluster</label>
-                <select
-                  value={newCluster}
-                  onChange={(e) => setNewCluster(e.target.value)}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                >
-                  <option value="old">old</option>
-                  <option value="new">new</option>
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-gray-700">Mode</label>
-                <select
-                  value={newAutoReplyMode}
-                  onChange={(e) => setNewAutoReplyMode(e.target.value)}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                >
-                  <option value="script">Script (multi-season)</option>
-                  <option value="static">Static (1 teks)</option>
-                </select>
-              </div>
-            </div>
-
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={newAutoReplyEnabled}
-                onChange={(e) => setNewAutoReplyEnabled(e.target.checked)}
-                className="h-4 w-4"
-              />
-              Auto-reply aktif
-            </label>
-
-            {newAutoReplyMode === 'script' ? (
-              <div>
-                <label className="text-sm font-medium text-gray-700">Parity (untuk dialog 2 orang)</label>
-                <select
-                  value={newScriptLineParity}
-                  onChange={(e) => setNewScriptLineParity(e.target.value)}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                >
-                  <option value="odd">odd (1,3,5...)</option>
-                  <option value="even">even (2,4,6...)</option>
-                  <option value="all">all (semua baris)</option>
-                </select>
-                <p className="mt-1 text-xs text-gray-500">Umumnya: old = odd, new = even.</p>
-              </div>
-            ) : null}
-
-            {newAutoReplyMode === 'static' ? (
-              <div>
-                <label className="text-sm font-medium text-gray-700">Teks auto-reply</label>
-                <textarea
-                  value={newAutoReplyText}
-                  onChange={(e) => setNewAutoReplyText(e.target.value)}
-                  className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                  rows={4}
-                />
-              </div>
-            ) : (
-              <div>
-                <label className="text-sm font-medium text-gray-700">Script multi-season</label>
-                <p className="mt-1 text-xs text-gray-500">Pisahkan antar season dengan 1 baris kosong. Tiap pesan masuk akan memajukan baris.</p>
-                <textarea
-                  value={newAutoReplyScriptText}
-                  onChange={(e) => setNewAutoReplyScriptText(e.target.value)}
-                  className="mt-2 w-full rounded-lg border px-3 py-2 text-sm"
-                  rows={8}
-                  placeholder="Season 1 line 1\nSeason 1 line 2\n\nSeason 2 line 1\n..."
-                />
-              </div>
-            )}
-
-            <div className="flex flex-wrap items-center gap-2">
-              <button className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800">Buat 1 session</button>
-              <button
-                type="button"
-                onClick={() => {
-                  setNewSessionName('');
-                  setNewCluster('old');
-                  setNewAutoReplyEnabled(false);
-                  setNewAutoReplyMode('script');
-                  setNewScriptLineParity('odd');
-                  setNewAutoReplyText('Terima kasih, pesan Anda sudah kami terima.');
-                  setNewAutoReplyScriptText('');
-                }}
-                className="rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-              >
-                Reset
-              </button>
-            </div>
-          </form>
-
-          <div className="mt-6 border-t pt-5">
-            <h3 className="text-sm font-semibold">Bulk input (mis. 12 session)</h3>
-            <form onSubmit={onBulkCreateSessions} className="mt-3 space-y-3">
-              <textarea
-                value={bulkSessionNamesText}
-                onChange={(e) => setBulkSessionNamesText(e.target.value)}
-                className="w-full rounded-lg border px-3 py-2 text-sm"
-                rows={6}
-                placeholder={'season-1\nseason-2\nseason-3\n...'}
-              />
-              <button
-                disabled={bulkCreating}
-                className="w-full rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-60"
-              >
-                {bulkCreating ? 'Memproses...' : 'Buat banyak session'}
-              </button>
-
-              {bulkResult?.ok ? (
-                <div className="rounded-lg border bg-gray-50 px-3 py-2 text-sm text-gray-700">
-                  Selesai: dibuat {bulkResult.createdCount}, skip {bulkResult.skippedCount}
-                </div>
-              ) : null}
-              {bulkResult?.skipped?.length ? (
-                <div className="text-xs text-gray-500">Skipped (sudah ada): {bulkResult.skipped.map((s) => s.wahaSession).join(', ')}</div>
-              ) : null}
-            </form>
-          </div>
-        </section>
-
-        <section className="rounded-2xl border bg-white p-5">
+      <section className="rounded-2xl border bg-white p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-semibold">Daftar sessions</h2>
@@ -386,8 +231,82 @@ export default function SessionsPage() {
               <div className="rounded-xl border bg-gray-50 px-4 py-3 text-sm text-gray-700">Belum ada session.</div>
             ) : null}
           </div>
-        </section>
-      </div>
+
+          {!canCreateMore ? (
+            <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Batas pembuatan session tercapai (maks. {MAX_SESSIONS}). Hapus salah satu session jika ingin membuat baru.
+            </div>
+          ) : null}
+      </section>
+
+      {createOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50"
+            aria-label="Tutup"
+            onClick={() => setCreateOpen(false)}
+          />
+
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="relative w-full max-w-lg rounded-2xl bg-white shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b px-6 py-4">
+              <div className="text-lg font-semibold">Buat Sesi Baru (maks. {MAX_SESSIONS})</div>
+              <button
+                type="button"
+                className="rounded-lg px-2 py-1 text-gray-500 hover:bg-gray-50"
+                onClick={() => setCreateOpen(false)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <form
+              className="space-y-4 px-6 py-5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newSessionName.trim()) return;
+                if (!canCreateMore) return;
+                onCreateSession();
+              }}
+            >
+              <div>
+                <label className="text-sm font-medium text-gray-700">Nama Sesi</label>
+                <input
+                  ref={nameInputRef}
+                  value={newSessionName}
+                  onChange={(e) => setNewSessionName(e.target.value)}
+                  className="mt-2 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/20"
+                  placeholder="Contoh: marketing-1"
+                />
+                <p className="mt-2 text-xs text-gray-500">Anda dapat membuat hingga {MAX_SESSIONS} sesi. Jika butuh lebih, silakan hubungi admin.</p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 border-t pt-4">
+                <button
+                  type="button"
+                  className="rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  onClick={() => setCreateOpen(false)}
+                >
+                  Tutup
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newSessionName.trim() || !canCreateMore}
+                  className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Buat Session
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
