@@ -339,7 +339,7 @@ export default function SessionsPage() {
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-xl font-semibold">WhatsApp Sessions</h1>
-            <p className="mt-1 text-sm text-gray-600">Kelola banyak nomor/season WAHA dan konfigurasi auto-reply.</p>
+            <p className="mt-1 text-sm text-gray-600">Kelola banyak nomor/session dan konfigurasi auto-reply.</p>
           </div>
           <div className="flex flex-col items-start gap-3 sm:items-end">
             <button
@@ -347,7 +347,7 @@ export default function SessionsPage() {
               onClick={initWa12Preset}
               className="rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {initBusy ? 'Menyiapkan...' : 'Init WA12 (3 old, 9 new)'}
+              {initBusy ? 'Menyiapkan...' : 'Init WA12 (5 old, 10 new)'}
             </button>
 
             <button
@@ -360,11 +360,6 @@ export default function SessionsPage() {
             >
               + New Session
             </button>
-
-            <div className="w-full sm:w-auto">
-              <div className="text-xs text-gray-500">Webhook URL</div>
-              <div className="mt-1 rounded-lg bg-gray-50 px-3 py-2 text-xs font-mono text-gray-800">{webhookUrl}</div>
-            </div>
           </div>
         </div>
       </div>

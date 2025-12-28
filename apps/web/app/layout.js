@@ -1,7 +1,7 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'WAHA Multi-Session',
+  title: 'WhatsApp Multi-Session',
   description: 'Multi session + auto reply per session',
 };
 

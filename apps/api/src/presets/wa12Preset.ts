@@ -15,8 +15,8 @@ export type Wa12Preset = {
 };
 
 export const WA12_PRESET: Wa12Preset = {
-  oldSessionNames: ['old-1', 'old-2', 'old-3'],
-  newSessionNames: ['new-1', 'new-2', 'new-3', 'new-4', 'new-5', 'new-6', 'new-7', 'new-8', 'new-9'],
+  oldSessionNames: ['old-1', 'old-2', 'old-3', 'old-4', 'old-5'],
+  newSessionNames: ['new-1', 'new-2', 'new-3', 'new-4', 'new-5', 'new-6', 'new-7', 'new-8', 'new-9', 'new-10'],
   // Untuk percakapan 2 arah:
   // - OLD kirim baris 1,3,5,...
   // - NEW balas baris 2,4,6,...

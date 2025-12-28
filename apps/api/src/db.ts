@@ -19,6 +19,9 @@ export type ChatProgress = {
   seasonIndex: number;
   lineIndex: number;
   lastInboundMessageId?: string;
+  messageCount?: number; // Total pesan keluar+masuk untuk NEW
+  lastOldIndex?: number; // Index OLD session terakhir yang digunakan (0-4)
+  lastMessageAt?: string; // Timestamp pesan terakhir
   updatedAt: string;
 };
 
@@ -50,6 +53,8 @@ export type ScheduledTask = {
   updatedAt: string;
   createdAt: string;
   senderSession?: string; // which session sends (if specified, overrides automation oldSessionNames pick)
+  targetNewChatId?: string; // untuk tracking target NEW (jika OLD yang kirim)
+  oldRotationIndex?: number; // index OLD session dalam rotation (0-4)
 };
 
 type DbShape = {

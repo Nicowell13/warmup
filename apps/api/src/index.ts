@@ -307,7 +307,7 @@ function randomTimesBetween(start: DateTime, end: DateTime, count: number): Date
   return times.map((ms) => DateTime.fromMillis(ms, { zone: start.zoneName || 'utc' }));
 }
 
-// --- Preset: WA12 (3 old + 9 new) ---
+// --- Preset: WA12 (5 old + 10 new) ---
 app.get('/presets/wa12', requireAuth, (_req, res) => {
   return res.json({
     ok: true,
@@ -388,17 +388,19 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     newSessionMap[cfg.newChatIds[i]] = newSessions[i % newSessions.length].wahaSession;
   }
 
-  // Map each NEW chatId to an OLD session (round-robin for even distribution)
-  // This ensures 3 OLD sessions evenly handle 9 NEW: each OLD gets 3 NEW targets
-  const newToOldMap: Record<string, string> = {};
+  // Map each NEW chatId to an OLD session (rotating untuk distribusi merata)
+  // Rotating: OLD-1 → OLD-2 → OLD-3 → OLD-4 → OLD-5 untuk setiap NEW target
+  const newToOldMap: Record<string, string[]> = {};
   for (let i = 0; i < cfg.newChatIds.length; i++) {
-    newToOldMap[cfg.newChatIds[i]] = oldSessions[i % oldSessions.length].wahaSession;
+    // Setiap NEW akan mendapat array 5 OLD sessions dalam urutan rotating
+    newToOldMap[cfg.newChatIds[i]] = oldSessions.map(s => s.wahaSession);
   }
 
-  // 4) Campaign initial send: OLD sends line 1 (odd) to each NEW target
+  // 4) Campaign initial send: OLD-1 sends line 1 (odd) to each NEW target
   const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
   for (const chatId of cfg.newChatIds) {
-    const oldSessionName = newToOldMap[chatId]; // Use mapped OLD session
+    const oldRotation = newToOldMap[chatId]; // Array of OLD sessions
+    const oldSessionName = oldRotation[0]; // Start with first OLD (old-1)
     const oldSession = db.getSessionByName(oldSessionName);
     if (!oldSession) {
       campaignResults.push({ chatId, fromSession: oldSessionName, ok: false, error: 'OLD session not found' });
@@ -416,6 +418,9 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       db.setChatProgress(oldSession.wahaSession, String(chatId), {
         seasonIndex: picked.nextSeasonIndex,
         lineIndex: picked.nextLineIndex,
+        messageCount: 1, // Initial count
+        lastOldIndex: 0, // Started with OLD index 0 (old-1)
+        lastMessageAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
 
@@ -451,7 +456,16 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const counts = [cfg.day1MessagesPerNew, cfg.day2MessagesPerNew, cfg.day3MessagesPerNew];
   const tasks = [] as any[];
 
-  // Build tasks alternating OLD and NEW
+  // Track cumulative message count dan OLD rotation per NEW target
+  const targetState: Record<string, { messageCount: number; currentOldIndex: number }> = {};
+  for (const newChatId of cfg.newChatIds) {
+    targetState[newChatId] = {
+      messageCount: 1, // Campaign initial sudah kirim 1 pesan
+      currentOldIndex: 1, // Mulai dari OLD-2 karena OLD-1 sudah kirim
+    };
+  }
+
+  // Build tasks dengan rotating OLD sessions dan delay 1.5 jam setelah setiap 24 pesan
   for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
     const baseDay = now.plus({ days: dayOffset }).startOf('day');
     const start = baseDay.set({ hour: sh, minute: sm, second: 0, millisecond: 0 });
@@ -461,33 +475,120 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     if (messagesCount <= 0) continue;
 
     for (const newChatId of cfg.newChatIds) {
-      const times = randomTimesBetween(start, end, messagesCount);
       const newSessionForThisTarget = newSessionMap[newChatId];
-      const oldSessionForThisTarget = newToOldMap[newChatId]; // Use consistent mapping
-      const oldChatIdForReply = oldSessionChatIds[oldSessionForThisTarget];
+      const oldRotation = newToOldMap[newChatId]; // Array of 5 OLD sessions
+      
+      // Untuk day 1, kurangi 1 karena campaign initial sudah kirim
+      const remainingMessages = dayOffset === 0 ? messagesCount - 1 : messagesCount;
+      
+      if (remainingMessages <= 0) continue;
 
-      if (!oldChatIdForReply) {
-        console.warn(`⚠️  OLD session ${oldSessionForThisTarget} not connected, skipping orchestrated schedule for target ${newChatId}`);
+      // Generate times
+      let times = randomTimesBetween(start, end, remainingMessages);
+      
+      // Tambahkan delay 1.5 jam setiap mencapai kelipatan 24 pesan
+      const state = targetState[newChatId];
+      const delayMinutes = 90; // 1.5 jam
+      const delayThreshold = 24; // Delay setiap 24 pesan
+      
+      // Calculate delays needed
+      const timesWithDelays: any[] = [];
+      let delayAccumulated = 0;
+      
+      for (let i = 0; i < times.length; i++) {
+        const messageNumberAfterThis = state.messageCount + i + 1;
+        
+        // Check if we just crossed a 24-message threshold
+        const previousThresholds = Math.floor((state.messageCount + i) / delayThreshold);
+        const currentThresholds = Math.floor(messageNumberAfterThis / delayThreshold);
+        
+        if (currentThresholds > previousThresholds) {
+          // We crossed a threshold, add delay
+          delayAccumulated += delayMinutes;
+        }
+        
+        timesWithDelays.push(times[i].plus({ minutes: delayAccumulated }));
+      }
+      
+      times = timesWithDelays;
+
+      // Get OLD chat IDs untuk semua OLD sessions
+      const oldChatIds: Record<string, string> = {};
+      for (const oldSessionName of oldRotation) {
+        if (oldSessionChatIds[oldSessionName]) {
+          oldChatIds[oldSessionName] = oldSessionChatIds[oldSessionName];
+        }
+      }
+
+      // Cek apakah semua OLD sessions connected
+      const connectedOldSessions = oldRotation.filter(name => oldChatIds[name]);
+      if (connectedOldSessions.length === 0) {
+        console.warn(`⚠️  No OLD sessions connected, skipping orchestrated schedule for target ${newChatId}`);
         continue;
       }
 
+      // Build tasks dengan rotating OLD (lanjutkan dari state sebelumnya)
+      let currentOldIndex = state.currentOldIndex;
+      
       for (let i = 0; i < times.length; i += 1) {
         const isOddIndex = i % 2 === 0;
-        const senderSession = isOddIndex ? oldSessionForThisTarget : newSessionForThisTarget;
-        const recipientChatId = isOddIndex ? newChatId : oldChatIdForReply;
+        
+        if (isOddIndex) {
+          // OLD kirim ke NEW
+          // Rotating: gunakan OLD sesuai urutan
+          const oldSessionName = oldRotation[currentOldIndex % oldRotation.length];
+          const oldChatIdForReply = oldChatIds[oldSessionName];
+          
+          if (!oldChatIdForReply) {
+            // Skip jika OLD session tidak connected
+            console.warn(`⚠️  OLD session ${oldSessionName} not connected, skipping message`);
+            continue;
+          }
 
-        tasks.push({
-          id: randomUUID(),
-          automationId,
-          dueAt: times[i].toUTC().toISO()!,
-          chatId: recipientChatId,
-          senderSession, // specify exact sender for orchestrated mode
-          kind: 'script-next',
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        });
+          tasks.push({
+            id: randomUUID(),
+            automationId,
+            dueAt: times[i].toUTC().toISO()!,
+            chatId: newChatId,
+            senderSession: oldSessionName,
+            kind: 'script-next',
+            status: 'pending',
+            targetNewChatId: newChatId, // Track target NEW
+            oldRotationIndex: currentOldIndex % oldRotation.length, // Track OLD index
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          
+          // Move to next OLD session
+          currentOldIndex++;
+        } else {
+          // NEW balas ke OLD yang terakhir kirim
+          const lastOldIndex = (currentOldIndex - 1) % oldRotation.length;
+          const lastOldSessionName = oldRotation[lastOldIndex];
+          const oldChatIdForReply = oldChatIds[lastOldSessionName];
+          
+          if (!oldChatIdForReply) {
+            console.warn(`⚠️  OLD session ${lastOldSessionName} not connected, skipping reply`);
+            continue;
+          }
+
+          tasks.push({
+            id: randomUUID(),
+            automationId,
+            dueAt: times[i].toUTC().toISO()!,
+            chatId: oldChatIdForReply,
+            senderSession: newSessionForThisTarget,
+            kind: 'script-next',
+            status: 'pending',
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
       }
+      
+      // Update state untuk hari berikutnya
+      targetState[newChatId].messageCount += remainingMessages;
+      targetState[newChatId].currentOldIndex = currentOldIndex;
     }
   }
 
@@ -731,7 +832,7 @@ app.delete('/automations/:id', requireAuth, (req, res) => {
   return res.status(204).send();
 });
 
-// Campaign: 3 old -> random ke list new (contoh 9 target).
+// Campaign: 5 old -> random ke list new (contoh 10 target).
 // Body: { newChatIds: string[] }
 // Syarat: ada minimal 1 session cluster=old, autoReplyEnabled=true, mode=script.
 app.post('/campaigns/start', requireAuth, async (req, res) => {
@@ -876,6 +977,7 @@ app.post('/waha/webhook', async (req, res) => {
       const progress = db.getChatProgress(config.wahaSession, String(chatId)) || {
         seasonIndex: 0,
         lineIndex: 0,
+        messageCount: 0,
         updatedAt: new Date().toISOString(),
       };
 
@@ -903,14 +1005,19 @@ app.post('/waha/webhook', async (req, res) => {
       }
 
       await sendTextQueued({ session: config.wahaSession, chatId: String(chatId), text: picked.text });
+      
+      // Update progress dengan message count increment (incoming + outgoing = +2)
+      const newMessageCount = (progress.messageCount || 0) + 2; // +1 untuk incoming, +1 untuk outgoing
       db.setChatProgress(config.wahaSession, String(chatId), {
         seasonIndex: picked.nextSeasonIndex,
         lineIndex: picked.nextLineIndex,
+        messageCount: newMessageCount,
         lastInboundMessageId: inboundMessageId ? String(inboundMessageId) : progress.lastInboundMessageId,
+        lastMessageAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
 
-      debug('sent:script', { session, chatId, preview: String(picked.text || '').slice(0, 40) });
+      debug('sent:script', { session, chatId, preview: String(picked.text || '').slice(0, 40), messageCount: newMessageCount });
 
       return res.status(200).json({ ok: true });
     }

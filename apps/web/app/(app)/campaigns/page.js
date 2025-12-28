@@ -152,7 +152,7 @@ export default function CampaignsPage() {
       <div className="rounded-2xl border bg-white p-5">
         <h1 className="text-xl font-semibold">Campaigns</h1>
         <p className="mt-1 text-sm text-gray-600">
-          3 OLD → kirim pesan awal ke list NEW, lalu otomatis membuat schedule follow-up (day1/day2/day3). Endpoint API: <span className="font-mono">{apiBase}/presets/wa12/run</span>
+          5 OLD sessions untuk mengirim pesan awal ke list NEW, lalu otomatis membuat schedule follow-up (day1/day2/day3).
         </p>
       </div>
 

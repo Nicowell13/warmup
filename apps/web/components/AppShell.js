@@ -6,7 +6,7 @@ import { clearToken } from '../lib/auth';
 
 const NAV = [
   { href: '/sessions', label: 'Sessions' },
-  { href: '/waha-auth', label: 'WAHA Auth' },
+  { href: '/waha-auth', label: 'WhatsApp Auth' },
   { href: '/campaigns', label: 'Campaigns' },
   { href: '/automations', label: 'Automations' },
 ];
@@ -26,7 +26,7 @@ export default function AppShell({ children }) {
           <div className="flex items-center gap-3">
             <div className="h-9 w-9 rounded-lg bg-gray-900" />
             <div>
-              <div className="text-sm font-semibold text-gray-900">WAHA Multi-Session</div>
+              <div className="text-sm font-semibold text-gray-900">WhatsApp Multi-Session</div>
               <div className="text-xs text-gray-500">Dashboard</div>
             </div>
           </div>

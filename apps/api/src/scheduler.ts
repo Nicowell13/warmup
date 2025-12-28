@@ -69,6 +69,7 @@ export function startScheduler(options: SchedulerOptions = {}) {
           const progress = db.getChatProgress(chosen.wahaSession, task.chatId) || {
             seasonIndex: 0,
             lineIndex: 0,
+            messageCount: 0,
             updatedAt: new Date().toISOString(),
           };
 
@@ -86,9 +87,15 @@ export function startScheduler(options: SchedulerOptions = {}) {
           }
 
           await sendTextQueued({ session: chosen.wahaSession, chatId: task.chatId, text: picked.text });
+          
+          // Update progress dengan message count
+          const newMessageCount = (progress.messageCount || 0) + 1;
           db.setChatProgress(chosen.wahaSession, task.chatId, {
             seasonIndex: picked.nextSeasonIndex,
             lineIndex: picked.nextLineIndex,
+            messageCount: newMessageCount,
+            lastOldIndex: task.oldRotationIndex ?? progress.lastOldIndex,
+            lastMessageAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           });
 

@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState } from 'react';
-import { apiFetch, getApiBaseUrl } from '../../../lib/api';
+import { useState } from 'react';
+import { apiFetch } from '../../../lib/api';
 import { getToken } from '../../../lib/auth';
 
 function Input(props) {
@@ -22,8 +22,6 @@ export default function WahaAuthPage() {
   const [qr, setQr] = useState(null);
   const [pairingCode, setPairingCode] = useState('');
 
-  const webhookUrl = useMemo(() => `${getApiBaseUrl()}/waha/webhook`, []);
-
   async function startSession() {
     setBusy(true);
     setError('');
@@ -33,7 +31,7 @@ export default function WahaAuthPage() {
         method: 'POST',
       });
     } catch (e) {
-      setError(e?.message || 'Gagal start session WAHA');
+      setError(e?.message || 'Gagal start session');
     } finally {
       setBusy(false);
     }
@@ -77,9 +75,9 @@ export default function WahaAuthPage() {
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border bg-white p-5">
-        <h1 className="text-xl font-semibold">WAHA Auth</h1>
+        <h1 className="text-xl font-semibold">WhatsApp Authentication</h1>
         <p className="mt-1 text-sm text-gray-600">
-          Login nomor WA ke WAHA via QR atau pairing code. Webhook URL: <span className="font-mono">{webhookUrl}</span>
+          Login nomor WhatsApp via QR atau pairing code.
         </p>
       </div>
 
@@ -92,7 +90,7 @@ export default function WahaAuthPage() {
           <h2 className="text-base font-semibold">Start + QR</h2>
           <div className="mt-4 space-y-4">
             <div>
-              <label className="text-sm font-medium text-gray-700">Nama session WAHA</label>
+              <label className="text-sm font-medium text-gray-700">Nama session</label>
               <Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="contoh: old-1" />
             </div>
 
@@ -117,7 +115,7 @@ export default function WahaAuthPage() {
               <div className="rounded-xl border bg-gray-50 p-4">
                 <div className="text-xs text-gray-600">Scan QR ini di WhatsApp (Linked devices).</div>
                 <img
-                  alt="WAHA QR"
+                  alt="QR Code"
                   src={`data:${qr.mimetype};base64,${qr.data}`}
                   className="mt-3 h-[260px] w-[260px] rounded-lg border bg-white"
                 />
@@ -132,7 +130,7 @@ export default function WahaAuthPage() {
 
           <div className="mt-4 space-y-4">
             <div>
-              <label className="text-sm font-medium text-gray-700">Nama session WAHA</label>
+              <label className="text-sm font-medium text-gray-700">Nama session</label>
               <Input value={sessionName} onChange={(e) => setSessionName(e.target.value)} placeholder="contoh: old-1" />
             </div>
 
