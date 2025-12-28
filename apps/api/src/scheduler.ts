@@ -37,6 +37,16 @@ export function startScheduler(options: SchedulerOptions = {}) {
             continue;
           }
 
+        let chosen: any = null;
+        if (task.senderSession) {
+          // Orchestrated mode: task specifies exact sender
+          chosen = db.getSessionByName(task.senderSession);
+          if (!chosen || (chosen.autoReplyScriptText || '').trim().length === 0) {
+            db.markScheduledTask(task.id, 'error', `Sender session not found or no script: ${task.senderSession}`);
+            continue;
+          }
+        } else {
+          // Legacy mode: pick random OLD
           const allOld = db
             .listSessions()
             .filter((s) => s.cluster === 'old' && s.autoReplyEnabled && (s.autoReplyMode || 'static') === 'script')
@@ -51,7 +61,8 @@ export function startScheduler(options: SchedulerOptions = {}) {
             continue;
           }
 
-          const chosen = pickRandom(oldSessions);
+          chosen = pickRandom(oldSessions);
+        }
           const parity = chosen.scriptLineParity || 'odd';
 
           const progress = db.getChatProgress(chosen.wahaSession, task.chatId) || {

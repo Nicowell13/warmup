@@ -49,6 +49,7 @@ export type ScheduledTask = {
   lastError?: string;
   updatedAt: string;
   createdAt: string;
+  senderSession?: string; // which session sends (if specified, overrides automation oldSessionNames pick)
 };
 
 type DbShape = {

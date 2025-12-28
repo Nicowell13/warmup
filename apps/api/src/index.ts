@@ -74,6 +74,32 @@ function isWahaConnected(raw: any): boolean {
   );
 }
 
+async function getSessionToChatIdMap(): Promise<Record<string, string>> {
+  try {
+    const data: any = await wahaListSessions(true);
+    const list: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.sessions)
+        ? data.sessions
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
+
+    const map: Record<string, string> = {};
+    for (const s of list) {
+      const name = extractWahaSessionName(s);
+      const phone = extractWahaPhoneNumber(s);
+      if (name && phone && isWahaConnected(s)) {
+        map[name] = `${phone}@c.us`;
+      }
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+
 app.get('/waha/sessions/status', requireAuth, async (_req, res) => {
   try {
     const data: any = await wahaListSessions(true);
@@ -324,42 +350,83 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const [sh, sm] = cfg.windowStart.split(':').map((n) => Number(n));
   const [eh, em] = cfg.windowEnd.split(':').map((n) => Number(n));
 
-  // 3) Start Campaign (initial send)
+  // 3) Gather OLD and NEW sessions
   const oldSessions = db
     .listSessions()
     .filter((s) => requestedOldSessionNames.includes(s.wahaSession))
-    .filter((s) => s.cluster === 'old' && s.autoReplyEnabled && (s.autoReplyMode || 'static') === 'script')
+    .filter((s) => s.cluster === 'old')
+    .filter((s) => (s.autoReplyScriptText || '').trim().length > 0);
+
+  const newSessions = db
+    .listSessions()
+    .filter((s) => s.cluster === 'new')
     .filter((s) => (s.autoReplyScriptText || '').trim().length > 0);
 
   if (oldSessions.length === 0) {
     return res.status(400).json({ error: 'Tidak ada session OLD siap dipakai untuk campaign.' });
   }
 
+  if (newSessions.length === 0) {
+    return res.status(400).json({ error: 'Tidak ada session NEW dengan script untuk orchestrated conversation.' });
+  }
+
+  // Get session-to-chatId mapping for orchestrated replies
+  const sessionToChatIdMap = await getSessionToChatIdMap();
+
+  // Map each OLD session to its chatId (for NEW to reply back to)
+  const oldSessionChatIds: Record<string, string> = {};
+  for (const os of oldSessions) {
+    const chatId = sessionToChatIdMap[os.wahaSession];
+    if (chatId) {
+      oldSessionChatIds[os.wahaSession] = chatId;
+    }
+  }
+
+  // Map each NEW chatId to a NEW session (round-robin for even distribution)
+  const newSessionMap: Record<string, string> = {};
+  for (let i = 0; i < cfg.newChatIds.length; i++) {
+    newSessionMap[cfg.newChatIds[i]] = newSessions[i % newSessions.length].wahaSession;
+  }
+
+  // Map each NEW chatId to an OLD session (round-robin for even distribution)
+  // This ensures 3 OLD sessions evenly handle 9 NEW: each OLD gets 3 NEW targets
+  const newToOldMap: Record<string, string> = {};
+  for (let i = 0; i < cfg.newChatIds.length; i++) {
+    newToOldMap[cfg.newChatIds[i]] = oldSessions[i % oldSessions.length].wahaSession;
+  }
+
+  // 4) Campaign initial send: OLD sends line 1 (odd) to each NEW target
   const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
   for (const chatId of cfg.newChatIds) {
-    const chosen = pickRandom(oldSessions);
+    const oldSessionName = newToOldMap[chatId]; // Use mapped OLD session
+    const oldSession = db.getSessionByName(oldSessionName);
+    if (!oldSession) {
+      campaignResults.push({ chatId, fromSession: oldSessionName, ok: false, error: 'OLD session not found' });
+      continue;
+    }
     try {
-      const parity = chosen.scriptLineParity || 'odd';
-      const picked = pickReplyFromScript(chosen.autoReplyScriptText || '', 0, 0, parity);
+      const parity = oldSession.scriptLineParity || 'odd';
+      const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, 0, parity);
       if (!picked) {
-        campaignResults.push({ chatId, fromSession: chosen.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
+        campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
         continue;
       }
 
-      await sendTextQueued({ session: chosen.wahaSession, chatId: String(chatId), text: picked.text });
-      db.setChatProgress(chosen.wahaSession, String(chatId), {
+      await sendTextQueued({ session: oldSession.wahaSession, chatId: String(chatId), text: picked.text });
+      db.setChatProgress(oldSession.wahaSession, String(chatId), {
         seasonIndex: picked.nextSeasonIndex,
         lineIndex: picked.nextLineIndex,
         updatedAt: new Date().toISOString(),
       });
 
-      campaignResults.push({ chatId, fromSession: chosen.wahaSession, ok: true });
+      campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: true });
     } catch (e: any) {
-      campaignResults.push({ chatId, fromSession: chosen.wahaSession, ok: false, error: e?.message || 'unknown' });
+      campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: e?.message || 'unknown' });
     }
   }
 
-  // 4) Schedule follow-ups (same logic as /automations/start)
+  // 5) Build orchestrated conversation schedule
+  // For each target NEW, we alternate OLD → NEW → OLD → NEW over 3 days
   const automationId = randomUUID();
   const automationName = String(req.body?.name || `wa12-${new Date().toISOString().slice(0, 10)}`);
   const startDate = now.toISODate()!;
@@ -383,22 +450,38 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
   const counts = [cfg.day1MessagesPerNew, cfg.day2MessagesPerNew, cfg.day3MessagesPerNew];
   const tasks = [] as any[];
+
+  // Build tasks alternating OLD and NEW
   for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
     const baseDay = now.plus({ days: dayOffset }).startOf('day');
     const start = baseDay.set({ hour: sh, minute: sm, second: 0, millisecond: 0 });
     const end = baseDay.set({ hour: eh, minute: em, second: 0, millisecond: 0 });
 
-    const perNew = counts[dayOffset] ?? 0;
-    if (perNew <= 0) continue;
+    const messagesCount = counts[dayOffset] ?? 0;
+    if (messagesCount <= 0) continue;
 
-    for (const chatId of cfg.newChatIds) {
-      const times = randomTimesBetween(start, end, perNew);
-      for (const t of times) {
+    for (const newChatId of cfg.newChatIds) {
+      const times = randomTimesBetween(start, end, messagesCount);
+      const newSessionForThisTarget = newSessionMap[newChatId];
+      const oldSessionForThisTarget = newToOldMap[newChatId]; // Use consistent mapping
+      const oldChatIdForReply = oldSessionChatIds[oldSessionForThisTarget];
+
+      if (!oldChatIdForReply) {
+        console.warn(`⚠️  OLD session ${oldSessionForThisTarget} not connected, skipping orchestrated schedule for target ${newChatId}`);
+        continue;
+      }
+
+      for (let i = 0; i < times.length; i += 1) {
+        const isOddIndex = i % 2 === 0;
+        const senderSession = isOddIndex ? oldSessionForThisTarget : newSessionForThisTarget;
+        const recipientChatId = isOddIndex ? newChatId : oldChatIdForReply;
+
         tasks.push({
           id: randomUUID(),
           automationId,
-          dueAt: t.toUTC().toISO()!,
-          chatId,
+          dueAt: times[i].toUTC().toISO()!,
+          chatId: recipientChatId,
+          senderSession, // specify exact sender for orchestrated mode
           kind: 'script-next',
           status: 'pending',
           createdAt: new Date().toISOString(),
@@ -415,6 +498,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     campaign: { results: campaignResults },
     automation,
     scheduled: tasks.length,
+    mode: 'orchestrated',
   });
 });
 
