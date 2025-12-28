@@ -63,7 +63,8 @@ export function startScheduler(options: SchedulerOptions = {}) {
 
           chosen = pickRandom(oldSessions);
         }
-          const parity = chosen.scriptLineParity || 'odd';
+          // Use session's configured parity (OLD should be 'odd', NEW should be 'even')
+          const parity = chosen.scriptLineParity || (chosen.cluster === 'new' ? 'even' : 'odd');
 
           const progress = db.getChatProgress(chosen.wahaSession, task.chatId) || {
             seasonIndex: 0,

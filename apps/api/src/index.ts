@@ -327,10 +327,7 @@ app.post('/presets/wa12/init', requireAuth, (_req, res) => {
 });
 
 app.post('/presets/wa12/run', requireAuth, async (req, res) => {
-  // 1) Ensure sessions exist + configured with preset script
-  ensureWa12PresetSessions();
-
-  // 2) Validate runtime config (targets + schedule)
+  // 1) Validate runtime config (targets + schedule)
   const cfg = getWa12RuntimeConfig(req.body);
   if (!cfg.newChatIds || cfg.newChatIds.length === 0) {
     return res.status(400).json({
@@ -350,16 +347,22 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const [sh, sm] = cfg.windowStart.split(':').map((n) => Number(n));
   const [eh, em] = cfg.windowEnd.split(':').map((n) => Number(n));
 
-  // 3) Gather OLD and NEW sessions
+  // 2) Get connected sessions first to avoid creating tasks for unpaired sessions
+  const sessionToChatIdMap = await getSessionToChatIdMap();
+  const connectedSessionNames = Object.keys(sessionToChatIdMap);
+
+  // 3) Gather OLD and NEW sessions (only connected ones)
   const oldSessions = db
     .listSessions()
     .filter((s) => requestedOldSessionNames.includes(s.wahaSession))
     .filter((s) => s.cluster === 'old')
+    .filter((s) => connectedSessionNames.includes(s.wahaSession))
     .filter((s) => (s.autoReplyScriptText || '').trim().length > 0);
 
   const newSessions = db
     .listSessions()
     .filter((s) => s.cluster === 'new')
+    .filter((s) => connectedSessionNames.includes(s.wahaSession))
     .filter((s) => (s.autoReplyScriptText || '').trim().length > 0);
 
   if (oldSessions.length === 0) {
@@ -369,9 +372,6 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   if (newSessions.length === 0) {
     return res.status(400).json({ error: 'Tidak ada session NEW dengan script untuk orchestrated conversation.' });
   }
-
-  // Get session-to-chatId mapping for orchestrated replies
-  const sessionToChatIdMap = await getSessionToChatIdMap();
 
   // Map each OLD session to its chatId (for NEW to reply back to)
   const oldSessionChatIds: Record<string, string> = {};
