@@ -706,23 +706,84 @@ app.post('/waha/webhook', async (req, res) => {
   try {
     const body = req.body as any;
 
-    const session = body.session || body?.payload?.session || body?.sessionName;
-    const fromMe = body.fromMe ?? body?.payload?.fromMe;
-    const chatId = body.chatId || body?.payload?.chatId || body?.from;
-    const text = body.text || body?.payload?.text || body?.message?.text || body?.body;
+    const WEBHOOK_DEBUG = String(process.env.WEBHOOK_DEBUG || '').trim() === '1';
+    const debug = (...args: any[]) => {
+      if (!WEBHOOK_DEBUG) return;
+      // eslint-disable-next-line no-console
+      console.log('[waha.webhook]', ...args);
+    };
+
+    const msg =
+      body?.message ||
+      body?.payload?.message ||
+      body?.payload?.messages?.[0] ||
+      body?.messages?.[0] ||
+      body?.payload?.data ||
+      body?.data?.[0] ||
+      body?.payload;
+
+    const key = msg?.key || body?.key || body?.payload?.key;
+
+    const session =
+      body.session ||
+      body?.payload?.session ||
+      body?.sessionName ||
+      body?.instance ||
+      body?.instanceId ||
+      body?.payload?.instance ||
+      body?.payload?.instanceId;
+
+    const fromMe =
+      body.fromMe ??
+      body?.payload?.fromMe ??
+      key?.fromMe ??
+      msg?.fromMe;
+
+    const chatId =
+      body.chatId ||
+      body?.payload?.chatId ||
+      body?.from ||
+      msg?.chatId ||
+      msg?.from ||
+      key?.remoteJid ||
+      key?.chatId ||
+      key?.remoteId;
+
+    const text =
+      body.text ||
+      body?.payload?.text ||
+      body?.message?.text ||
+      body?.body ||
+      msg?.text ||
+      msg?.body ||
+      msg?.message?.conversation ||
+      msg?.message?.extendedTextMessage?.text ||
+      msg?.message?.imageMessage?.caption ||
+      msg?.message?.videoMessage?.caption ||
+      msg?.message?.documentMessage?.caption;
+
     const inboundMessageId =
-      body.id || body.messageId || body?.payload?.id || body?.payload?.messageId || body?.message?.id;
+      body.id ||
+      body.messageId ||
+      body?.payload?.id ||
+      body?.payload?.messageId ||
+      body?.message?.id ||
+      msg?.id ||
+      key?.id;
 
     if (!session || !chatId) {
+      debug('ignored:missing_session_or_chatId', { session, chatId, keys: Object.keys(body || {}) });
       return res.status(200).json({ ok: true, ignored: true });
     }
 
     if (fromMe) {
+      debug('ignored:fromMe', { session, chatId });
       return res.status(200).json({ ok: true, ignored: true });
     }
 
     const config = db.getSessionByName(String(session));
     if (!config?.autoReplyEnabled) {
+      debug('ignored:no_config_or_disabled', { session, chatId, hasConfig: !!config });
       return res.status(200).json({ ok: true, ignored: true });
     }
 
@@ -735,6 +796,7 @@ app.post('/waha/webhook', async (req, res) => {
       };
 
       if (inboundMessageId && progress.lastInboundMessageId === String(inboundMessageId)) {
+        debug('ignored:duplicate_inbound', { session, chatId, inboundMessageId });
         return res.status(200).json({ ok: true, ignored: true });
       }
 
@@ -752,6 +814,7 @@ app.post('/waha/webhook', async (req, res) => {
           lastInboundMessageId: inboundMessageId ? String(inboundMessageId) : progress.lastInboundMessageId,
           updatedAt: new Date().toISOString(),
         });
+        debug('ignored:script_exhausted', { session, chatId });
         return res.status(200).json({ ok: true, ignored: true });
       }
 
@@ -763,12 +826,15 @@ app.post('/waha/webhook', async (req, res) => {
         updatedAt: new Date().toISOString(),
       });
 
+      debug('sent:script', { session, chatId, preview: String(picked.text || '').slice(0, 40) });
+
       return res.status(200).json({ ok: true });
     }
 
     const replyText = config.autoReplyText || 'Terima kasih, pesan Anda sudah kami terima.';
     // Tetap balas untuk non-text messages juga.
     await sendTextQueued({ session: config.wahaSession, chatId: String(chatId), text: replyText });
+    debug('sent:static', { session, chatId, preview: String(replyText || '').slice(0, 40) });
     return res.status(200).json({ ok: true });
   } catch (err: any) {
     // Don't fail the webhook hard; WAHA might retry.
