@@ -24,6 +24,7 @@ export default function SessionsPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [newSessionName, setNewSessionName] = useState('');
+  const [newSessionCluster, setNewSessionCluster] = useState('old');
   const nameInputRef = useRef(null);
 
   const [authOpen, setAuthOpen] = useState(false);
@@ -67,9 +68,11 @@ export default function SessionsPage() {
         method: 'POST',
         body: {
           wahaSession: createdName,
+          cluster: newSessionCluster,
         },
       });
       setNewSessionName('');
+      setNewSessionCluster('old');
       setCreateOpen(false);
       await loadSessions(token);
 
@@ -355,6 +358,19 @@ export default function SessionsPage() {
                 </div>
 
                 <div className="mt-4 grid grid-cols-1 gap-3">
+                  <div>
+                    <label className="text-sm font-medium text-gray-700">Cluster</label>
+                    <select
+                      value={s.cluster || 'old'}
+                      onChange={(e) => onSaveSession(s.id, { cluster: e.target.value })}
+                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    >
+                      <option value="old">old</option>
+                      <option value="new">new</option>
+                    </select>
+                    <div className="mt-1 text-xs text-gray-500">OLD dipakai sebagai pengirim campaign/schedule. NEW biasanya nomor yang hanya menerima & auto-reply.</div>
+                  </div>
+
                   <label className="flex items-center gap-2 text-sm text-gray-700">
                     <input
                       type="checkbox"
@@ -430,6 +446,18 @@ export default function SessionsPage() {
                   placeholder="Contoh: marketing-1"
                 />
                 <p className="mt-2 text-xs text-gray-500">Anda dapat membuat hingga {MAX_SESSIONS} sesi. Jika butuh lebih, silakan hubungi admin.</p>
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-gray-700">Cluster</label>
+                <select
+                  value={newSessionCluster}
+                  onChange={(e) => setNewSessionCluster(e.target.value)}
+                  className="mt-2 w-full rounded-lg border px-3 py-2 text-sm"
+                >
+                  <option value="old">old (pengirim)</option>
+                  <option value="new">new (penerima/auto-reply)</option>
+                </select>
               </div>
 
               <div className="flex items-center justify-end gap-2 border-t pt-4">
