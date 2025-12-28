@@ -1,7 +1,8 @@
 export type Wa12Preset = {
   oldSessionNames: string[];
   newSessionNames: string[];
-  scriptLineParity: 'odd' | 'even' | 'all';
+  oldScriptLineParity: 'odd' | 'even' | 'all';
+  newScriptLineParity: 'odd' | 'even' | 'all';
   scriptText: string;
   automationDefaults: {
     timezone: string;
@@ -16,7 +17,11 @@ export type Wa12Preset = {
 export const WA12_PRESET: Wa12Preset = {
   oldSessionNames: ['old-1', 'old-2', 'old-3'],
   newSessionNames: ['new-1', 'new-2', 'new-3', 'new-4', 'new-5', 'new-6', 'new-7', 'new-8', 'new-9'],
-  scriptLineParity: 'all',
+  // Untuk percakapan 2 arah:
+  // - OLD kirim baris 1,3,5,...
+  // - NEW balas baris 2,4,6,...
+  oldScriptLineParity: 'odd',
+  newScriptLineParity: 'even',
   scriptText: `Hei, kamu udah nonton serial baru yang lagi rame dibahas orang-orang?
 Iya, aku malah ngebut nontonnya pas jam istirahat. Nagih banget!
 Aku rencana mulai nonton weekend ini. Ceritanya soal apa sih?

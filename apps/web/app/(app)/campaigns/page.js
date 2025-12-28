@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { apiFetch, getApiBaseUrl } from '../../../lib/api';
 import { getToken } from '../../../lib/auth';
 
@@ -20,7 +20,94 @@ export default function CampaignsPage() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
 
+  const [prefillBusy, setPrefillBusy] = useState(false);
+
   const apiBase = useMemo(() => getApiBaseUrl(), []);
+
+  function toChatId(phoneDigits) {
+    const digits = String(phoneDigits || '').replace(/[^0-9]/g, '');
+    if (!digits) return '';
+    return `${digits}@c.us`;
+  }
+
+  async function prefillFromConnected({ overwrite } = { overwrite: false }) {
+    const token = getToken();
+    if (!token) return;
+
+    setPrefillBusy(true);
+    try {
+      const [sessionsRes, statusRes] = await Promise.all([
+        apiFetch('/sessions', { token }),
+        apiFetch('/waha/sessions/status', { token }),
+      ]);
+
+      const statusMap = {};
+      for (const s of statusRes?.sessions || []) {
+        statusMap[s.name] = s;
+      }
+
+      const allSessions = sessionsRes?.sessions || [];
+
+      const connectedOldNames = allSessions
+        .filter((s) => (s.cluster || 'old') === 'old')
+        .map((s) => s.wahaSession)
+        .filter((name) => statusMap?.[name]?.connected);
+
+      const connectedNewChatIds = allSessions
+        .filter((s) => (s.cluster || 'old') === 'new')
+        .map((s) => s.wahaSession)
+        .filter((name) => statusMap?.[name]?.connected)
+        .map((name) => toChatId(statusMap?.[name]?.phoneNumber))
+        .filter(Boolean);
+
+      if (overwrite || !(oldSessionsText || '').trim() || (oldSessionsText || '').trim() === 'old-1') {
+        if (connectedOldNames.length > 0) setOldSessionsText(connectedOldNames.join('\n'));
+      }
+
+      if (overwrite || !(targetsText || '').trim()) {
+        if (connectedNewChatIds.length > 0) setTargetsText(connectedNewChatIds.join('\n'));
+      }
+    } catch {
+      // ignore (WAHA down or not configured yet)
+    } finally {
+      setPrefillBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    try {
+      const savedTargets = localStorage.getItem('campaigns.targetsText');
+      const savedOld = localStorage.getItem('campaigns.oldSessionsText');
+      const savedResult = localStorage.getItem('campaigns.lastResult');
+      if (typeof savedTargets === 'string') setTargetsText(savedTargets);
+      if (typeof savedOld === 'string') setOldSessionsText(savedOld);
+      if (typeof savedResult === 'string' && savedResult.trim()) {
+        setResult(JSON.parse(savedResult));
+      }
+    } catch {
+      // ignore
+    }
+
+    // auto-prefill on first load (won't overwrite saved values)
+    prefillFromConnected({ overwrite: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('campaigns.targetsText', targetsText);
+    } catch {
+      // ignore
+    }
+  }, [targetsText]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('campaigns.oldSessionsText', oldSessionsText);
+    } catch {
+      // ignore
+    }
+  }, [oldSessionsText]);
 
   async function startCampaign() {
     setRunning(true);
@@ -44,6 +131,11 @@ export default function CampaignsPage() {
         body: { newChatIds, oldSessionNames },
       });
       setResult(data);
+      try {
+        localStorage.setItem('campaigns.lastResult', JSON.stringify(data));
+      } catch {
+        // ignore
+      }
     } catch (e) {
       setError(e?.message || 'Gagal menjalankan campaign');
     } finally {
@@ -81,6 +173,18 @@ export default function CampaignsPage() {
               rows={2}
               placeholder="old-1\nold-2"
             />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              disabled={prefillBusy}
+              onClick={() => prefillFromConnected({ overwrite: true })}
+              className="rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+            >
+              {prefillBusy ? 'Mengisi...' : 'Autofill dari Sessions (connected)'}
+            </button>
+            <div className="text-xs text-gray-500">Mengisi OLD & target NEW dari session yang statusnya connected. Tetap bisa diedit.</div>
           </div>
 
           <Textarea

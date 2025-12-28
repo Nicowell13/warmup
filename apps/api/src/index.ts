@@ -176,7 +176,7 @@ const sessionCreateSchema = z.object({
   cluster: z.enum(['old', 'new']).optional().default('old'),
   autoReplyEnabled: z.boolean().optional().default(true),
   autoReplyMode: z.enum(['static', 'script']).optional().default('script'),
-  scriptLineParity: z.enum(['odd', 'even', 'all']).optional().default(WA12_PRESET.scriptLineParity),
+  scriptLineParity: z.enum(['odd', 'even', 'all']).optional(),
   autoReplyText: z.string().optional().default('Terima kasih, pesan Anda sudah kami terima.'),
   autoReplyScriptText: z.string().optional().default(WA12_PRESET.scriptText),
 });
@@ -232,7 +232,7 @@ function ensureWa12PresetSessions() {
         cluster: item.cluster,
         autoReplyEnabled: true,
         autoReplyMode: 'script',
-        scriptLineParity: WA12_PRESET.scriptLineParity,
+        scriptLineParity: item.cluster === 'new' ? WA12_PRESET.newScriptLineParity : WA12_PRESET.oldScriptLineParity,
         autoReplyScriptText: WA12_PRESET.scriptText,
         // keep existing autoReplyText as-is
       });
@@ -247,7 +247,7 @@ function ensureWa12PresetSessions() {
       cluster: item.cluster,
       autoReplyEnabled: true,
       autoReplyMode: 'script',
-      scriptLineParity: WA12_PRESET.scriptLineParity,
+      scriptLineParity: item.cluster === 'new' ? WA12_PRESET.newScriptLineParity : WA12_PRESET.oldScriptLineParity,
       autoReplyText: 'Terima kasih, pesan Anda sudah kami terima.',
       autoReplyScriptText: WA12_PRESET.scriptText,
       createdAt: new Date().toISOString(),
@@ -288,7 +288,8 @@ app.get('/presets/wa12', requireAuth, (_req, res) => {
     preset: {
       oldSessionNames: WA12_PRESET.oldSessionNames,
       newSessionNames: WA12_PRESET.newSessionNames,
-      scriptLineParity: WA12_PRESET.scriptLineParity,
+      oldScriptLineParity: WA12_PRESET.oldScriptLineParity,
+      newScriptLineParity: WA12_PRESET.newScriptLineParity,
       automationDefaults: WA12_PRESET.automationDefaults,
     },
   });
@@ -453,7 +454,7 @@ app.post('/sessions/bulk', requireAuth, (req, res) => {
     cluster: z.enum(['old', 'new']).optional().default('old'),
     autoReplyEnabled: z.boolean().optional().default(false),
     autoReplyMode: z.enum(['static', 'script']).optional().default('static'),
-    scriptLineParity: z.enum(['odd', 'even', 'all']).optional().default('odd'),
+    scriptLineParity: z.enum(['odd', 'even', 'all']).optional(),
     autoReplyText: z.string().optional().default('Terima kasih, pesan Anda sudah kami terima.'),
     autoReplyScriptText: z.string().optional().default(''),
   });
@@ -472,6 +473,11 @@ app.post('/sessions/bulk', requireAuth, (req, res) => {
 
   const created: any[] = [];
   const skipped: Array<{ wahaSession: string; reason: string }> = [];
+  const parityProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'scriptLineParity');
+  const computedParity = parityProvided
+    ? parsed.data.scriptLineParity
+    : (parsed.data.cluster === 'new' ? WA12_PRESET.newScriptLineParity : WA12_PRESET.oldScriptLineParity);
+
   for (const wahaSession of normalized) {
     if (db.getSessionByName(wahaSession)) {
       skipped.push({ wahaSession, reason: 'exists' });
@@ -484,7 +490,7 @@ app.post('/sessions/bulk', requireAuth, (req, res) => {
       cluster: parsed.data.cluster,
       autoReplyEnabled: parsed.data.autoReplyEnabled,
       autoReplyMode: parsed.data.autoReplyMode,
-      scriptLineParity: parsed.data.scriptLineParity,
+      scriptLineParity: computedParity,
       autoReplyText: parsed.data.autoReplyText,
       autoReplyScriptText: parsed.data.autoReplyScriptText,
       createdAt: new Date().toISOString(),
