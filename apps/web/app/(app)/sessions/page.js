@@ -18,6 +18,7 @@ export default function SessionsPage() {
   const [error, setError] = useState('');
 
   const [initBusy, setInitBusy] = useState(false);
+  const [statusMap, setStatusMap] = useState({});
 
   const MAX_SESSIONS = 12;
   const canCreateMore = sessions.length < MAX_SESSIONS;
@@ -54,10 +55,47 @@ export default function SessionsPage() {
     }
   }
 
+  async function loadWahaStatus(currentToken) {
+    try {
+      const data = await apiFetch('/waha/sessions/status', { token: currentToken });
+      const next = {};
+      for (const s of data?.sessions || []) {
+        next[s.name] = s;
+      }
+      setStatusMap(next);
+      return next;
+    } catch {
+      return statusMap;
+    }
+  }
+
   useEffect(() => {
     if (!token) return;
     loadSessions(token);
+    loadWahaStatus(token);
   }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (!authOpen || !authSessionName) return;
+
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      const next = await loadWahaStatus(token);
+      if (next?.[authSessionName]?.connected) {
+        setAuthOpen(false);
+      }
+    };
+
+    const id = setInterval(tick, 2500);
+    tick();
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authOpen, authSessionName, token]);
 
   async function onCreateSession() {
     setError('');
@@ -155,6 +193,17 @@ export default function SessionsPage() {
     setAuthSessionName(sessionName);
     setAuthError('');
     setQr(null);
+
+    // If already connected, auto-close (status will refresh via polling).
+    try {
+      const next = await loadWahaStatus(token);
+      if (next?.[sessionName]?.connected) {
+        setAuthOpen(false);
+        return;
+      }
+    } catch {
+      // ignore
+    }
 
     const cached = typeof window !== 'undefined' ? readCachedPairing(sessionName) : null;
     setPairingCode(cached?.code || '');
@@ -276,6 +325,7 @@ export default function SessionsPage() {
     try {
       await apiFetch('/presets/wa12/init', { token, method: 'POST' });
       await loadSessions(token);
+      await loadWahaStatus(token);
     } catch (e) {
       setError(e?.message || 'Gagal init preset');
     } finally {
@@ -329,7 +379,13 @@ export default function SessionsPage() {
               <h2 className="text-base font-semibold">Daftar sessions</h2>
               <p className="mt-1 text-sm text-gray-600">Edit konfigurasi auto-reply per session.</p>
             </div>
-            <button onClick={() => loadSessions(token)} className="rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+            <button
+              onClick={async () => {
+                await loadSessions(token);
+                await loadWahaStatus(token);
+              }}
+              className="rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
               Refresh
             </button>
           </div>
@@ -343,6 +399,13 @@ export default function SessionsPage() {
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-gray-900">{s.wahaSession}</div>
                     <div className="mt-0.5 text-xs text-gray-500">cluster: {s.cluster || 'old'}</div>
+                    {statusMap?.[s.wahaSession]?.connected ? (
+                      <div className="mt-0.5 text-xs text-gray-600">
+                        connected{statusMap?.[s.wahaSession]?.phoneNumber ? `: ${statusMap?.[s.wahaSession]?.phoneNumber}` : ''}
+                      </div>
+                    ) : (
+                      <div className="mt-0.5 text-xs text-gray-500">not connected</div>
+                    )}
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <button

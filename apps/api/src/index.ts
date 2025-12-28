@@ -7,7 +7,7 @@ import { DateTime } from 'luxon';
 
 import { db } from './db.js';
 import { requireAuth, signToken, verifyAdminPassword } from './auth.js';
-import { wahaDeleteSession, wahaGetQrBase64, wahaRequestPairingCode, wahaStartSession } from './waha.js';
+import { wahaDeleteSession, wahaGetQrBase64, wahaListSessions, wahaRequestPairingCode, wahaStartSession } from './waha.js';
 import { pickRandom, pickReplyFromScript } from './script.js';
 import { startScheduler } from './scheduler.js';
 import { WA12_PRESET } from './presets/wa12Preset.js';
@@ -27,6 +27,82 @@ app.use(
 
 app.get('/health', (_req, res) => {
   res.json({ ok: true });
+});
+
+function normalizePhoneNumber(value: string): string {
+  const digits = String(value || '').replace(/[^0-9]/g, '');
+  return digits;
+}
+
+function extractWahaSessionName(raw: any): string {
+  return String(raw?.name || raw?.session || raw?.id || raw?.sessionName || '').trim();
+}
+
+function extractWahaPhoneNumber(raw: any): string | null {
+  const candidates = [
+    raw?.me?.user,
+    raw?.me?.phoneNumber,
+    raw?.me?.number,
+    raw?.config?.phoneNumber,
+    raw?.phoneNumber,
+    raw?.number,
+    raw?.wid,
+    raw?.me?.id,
+    raw?.me?.wid,
+  ].filter(Boolean);
+
+  for (const c of candidates) {
+    const s = String(c);
+    // handle wid/id like 62812xxxx@c.us
+    const beforeAt = s.includes('@') ? s.split('@')[0] : s;
+    const digits = normalizePhoneNumber(beforeAt);
+    if (digits.length >= 7) return digits;
+  }
+  return null;
+}
+
+function isWahaConnected(raw: any): boolean {
+  const status = String(raw?.status || raw?.state || raw?.connectionStatus || '').toLowerCase();
+  if (raw?.me) return true;
+  return (
+    status.includes('work') ||
+    status.includes('ready') ||
+    status.includes('connect') ||
+    status.includes('open') ||
+    status.includes('auth') ||
+    status.includes('running')
+  );
+}
+
+app.get('/waha/sessions/status', requireAuth, async (_req, res) => {
+  try {
+    const data: any = await wahaListSessions(true);
+    const list: any[] = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.sessions)
+        ? data.sessions
+        : Array.isArray(data?.data)
+          ? data.data
+          : [];
+
+    const sessions = list
+      .map((s) => {
+        const name = extractWahaSessionName(s);
+        if (!name) return null;
+        const phoneNumber = extractWahaPhoneNumber(s);
+        return {
+          name,
+          connected: isWahaConnected(s),
+          status: s?.status || s?.state || null,
+          phoneNumber,
+        };
+      })
+      .filter(Boolean);
+
+    return res.json({ ok: true, sessions });
+  } catch (e: any) {
+    return res.status(502).json({ error: e?.message || 'WAHA error' });
+  }
 });
 
 // --- WAHA Session Auth helpers (proxy) ---
