@@ -15,6 +15,7 @@ function Textarea(props) {
 
 export default function CampaignsPage() {
   const [targetsText, setTargetsText] = useState('');
+  const [oldSessionsText, setOldSessionsText] = useState('old-1');
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -32,10 +33,15 @@ export default function CampaignsPage() {
         .map((s) => s.trim())
         .filter(Boolean);
 
-      const data = await apiFetch('/campaigns/start', {
+      const oldSessionNames = (oldSessionsText || '')
+        .split(/\r?\n|,/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      const data = await apiFetch('/presets/wa12/run', {
         token: getToken(),
         method: 'POST',
-        body: { newChatIds },
+        body: { newChatIds, oldSessionNames },
       });
       setResult(data);
     } catch (e) {
@@ -45,15 +51,16 @@ export default function CampaignsPage() {
     }
   }
 
-  const successCount = result?.results?.filter((r) => r.ok).length || 0;
-  const totalCount = result?.results?.length || 0;
+  const results = result?.campaign?.results || result?.results || [];
+  const successCount = results?.filter((r) => r.ok).length || 0;
+  const totalCount = results?.length || 0;
 
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border bg-white p-5">
         <h1 className="text-xl font-semibold">Campaigns</h1>
         <p className="mt-1 text-sm text-gray-600">
-          OLD → kirim pesan awal ke list NEW (random). Endpoint API: <span className="font-mono">{apiBase}/campaigns/start</span>
+          3 OLD → kirim pesan awal ke list NEW, lalu otomatis membuat schedule follow-up (day1/day2/day3). Endpoint API: <span className="font-mono">{apiBase}/presets/wa12/run</span>
         </p>
       </div>
 
@@ -63,9 +70,19 @@ export default function CampaignsPage() {
 
       <section className="rounded-2xl border bg-white p-5">
         <h2 className="text-base font-semibold">Start campaign</h2>
-        <p className="mt-1 text-sm text-gray-600">Isi daftar chatId NEW: 1 baris = 1 chatId.</p>
+        <p className="mt-1 text-sm text-gray-600">Pilih OLD session yang sudah pairing, lalu isi daftar chatId NEW (1 baris = 1 chatId).</p>
 
         <div className="mt-4 space-y-4">
+          <div>
+            <label className="text-sm font-medium text-gray-700">OLD session names (comma / newline)</label>
+            <Textarea
+              value={oldSessionsText}
+              onChange={(e) => setOldSessionsText(e.target.value)}
+              rows={2}
+              placeholder="old-1\nold-2"
+            />
+          </div>
+
           <Textarea
             value={targetsText}
             onChange={(e) => setTargetsText(e.target.value)}
@@ -79,17 +96,17 @@ export default function CampaignsPage() {
               onClick={startCampaign}
               className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:opacity-60"
             >
-              {running ? 'Menjalankan...' : 'Start Campaign'}
+              {running ? 'Menjalankan...' : 'Start Campaign + Schedule'}
             </button>
 
             {totalCount ? <div className="text-sm text-gray-600">Sukses: {successCount}/{totalCount}</div> : null}
           </div>
 
-          {result?.results?.length ? (
+          {results?.length ? (
             <div className="rounded-xl border bg-gray-50 p-4 text-sm text-gray-700">
               <div className="mb-2 text-xs text-gray-600">Hasil</div>
               <div className="space-y-1">
-                {result.results.map((r) => (
+                {results.map((r) => (
                   <div key={`${r.fromSession}-${r.chatId}`} className="flex flex-wrap gap-2">
                     <span className={r.ok ? 'text-green-700' : 'text-red-700'}>{r.ok ? 'OK' : 'ERR'}</span>
                     <span>
@@ -100,6 +117,10 @@ export default function CampaignsPage() {
                 ))}
               </div>
             </div>
+          ) : null}
+
+          {typeof result?.scheduled === 'number' ? (
+            <div className="rounded-xl border bg-gray-50 px-4 py-3 text-sm text-gray-700">Schedule dibuat: {result.scheduled} task</div>
           ) : null}
         </div>
       </section>

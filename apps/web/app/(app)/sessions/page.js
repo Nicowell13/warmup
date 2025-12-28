@@ -17,7 +17,9 @@ export default function SessionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const MAX_SESSIONS = 3;
+  const [initBusy, setInitBusy] = useState(false);
+
+  const MAX_SESSIONS = 12;
   const canCreateMore = sessions.length < MAX_SESSIONS;
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -265,6 +267,19 @@ export default function SessionsPage() {
     }
   }
 
+  async function initWa12Preset() {
+    setInitBusy(true);
+    setError('');
+    try {
+      await apiFetch('/presets/wa12/init', { token, method: 'POST' });
+      await loadSessions(token);
+    } catch (e) {
+      setError(e?.message || 'Gagal init preset');
+    } finally {
+      setInitBusy(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border bg-white p-5">
@@ -274,6 +289,14 @@ export default function SessionsPage() {
             <p className="mt-1 text-sm text-gray-600">Kelola banyak nomor/season WAHA dan konfigurasi auto-reply.</p>
           </div>
           <div className="flex flex-col items-start gap-3 sm:items-end">
+            <button
+              disabled={initBusy}
+              onClick={initWa12Preset}
+              className="rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {initBusy ? 'Menyiapkan...' : 'Init WA12 (3 old, 9 new)'}
+            </button>
+
             <button
               disabled={!canCreateMore}
               onClick={() => {
@@ -342,56 +365,9 @@ export default function SessionsPage() {
                     Auto-reply aktif
                   </label>
 
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div>
-                      <label className="text-sm font-medium text-gray-700">Mode</label>
-                      <select
-                        value={s.autoReplyMode || 'static'}
-                        onChange={(e) => onSaveSession(s.id, { autoReplyMode: e.target.value })}
-                        className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                      >
-                        <option value="script">script</option>
-                        <option value="static">static</option>
-                      </select>
-                    </div>
-
-                    {(s.autoReplyMode || 'static') === 'script' ? (
-                      <div>
-                        <label className="text-sm font-medium text-gray-700">Parity</label>
-                        <select
-                          value={s.scriptLineParity || 'odd'}
-                          onChange={(e) => onSaveSession(s.id, { scriptLineParity: e.target.value })}
-                          className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                        >
-                          <option value="odd">odd</option>
-                          <option value="even">even</option>
-                          <option value="all">all</option>
-                        </select>
-                      </div>
-                    ) : null}
+                  <div className="rounded-xl border bg-gray-50 px-4 py-3 text-sm text-gray-700">
+                    Mode auto-reply memakai preset (script). Anda cukup pairing 12 session lalu jalankan campaign.
                   </div>
-
-                  {(s.autoReplyMode || 'static') === 'static' ? (
-                    <div>
-                      <label className="text-sm font-medium text-gray-700">Auto-reply text</label>
-                      <textarea
-                        defaultValue={s.autoReplyText || ''}
-                        onBlur={(e) => onSaveSession(s.id, { autoReplyText: e.target.value })}
-                        className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                        rows={3}
-                      />
-                    </div>
-                  ) : (
-                    <div>
-                      <label className="text-sm font-medium text-gray-700">Script</label>
-                      <textarea
-                        defaultValue={s.autoReplyScriptText || ''}
-                        onBlur={(e) => onSaveSession(s.id, { autoReplyScriptText: e.target.value })}
-                        className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                        rows={6}
-                      />
-                    </div>
-                  )}
                 </div>
               </div>
             ))}

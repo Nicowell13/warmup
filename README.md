@@ -3,7 +3,7 @@
 ## Fitur
 - Login (JWT sederhana) untuk akses dashboard
 - Multi session (nama session WAHA) tersimpan di storage lokal API
-- Auto-reply per session via webhook WAHA
+- Auto-reply per session via webhook WAHA (mendukung setup banyak nomor; default UI diset untuk 12 session)
 - Docker Compose untuk `waha`, `api`, dan `web`
 
 ## Jalankan mode development (tanpa Docker)
