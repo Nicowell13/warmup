@@ -6,7 +6,7 @@ import { clearToken } from '../lib/auth';
 
 const NAV = [
   { href: '/sessions', label: 'Sessions' },
-  { href: '/waha-auth', label: 'WhatsApp Auth' },
+ 
   { href: '/campaigns', label: 'Campaigns' },
   { href: '/automations', label: 'Automations' },
 ];
