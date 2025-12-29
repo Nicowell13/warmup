@@ -19,12 +19,11 @@ services:
       context: ./apps/api
     container_name: app-api
     restart: unless-stopped
+    env_file:
+      - ./apps/api/.env.local
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - JWT_SECRET=63aeedb737cd1470c76cf13c5dfd5a37f06b2c44a8174c98fbd0a78d5df973f23a3a565bbab66817b0fa0558a2e2e671313bca3a23ffe6b13f8a40a9251d6260
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin
       - DATABASE_URL=file:/data/app.db
       - WAHA_BASE_URL=http://waha:3000
       # Must match WAHA service key if enabled
