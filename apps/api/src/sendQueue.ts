@@ -13,9 +13,38 @@ const SEND_COOLDOWN_EVERY = Number(process.env.SEND_COOLDOWN_EVERY || 5);
 const SEND_COOLDOWN_MIN_MS = Number(process.env.SEND_COOLDOWN_MIN_MS || 15_000);
 const SEND_COOLDOWN_MAX_MS = Number(process.env.SEND_COOLDOWN_MAX_MS || 30_000);
 
-let chain: Promise<void> = Promise.resolve();
-let lastSentAt = 0;
-let sentCount = 0;
+type WorkerState = {
+  chain: Promise<void>;
+  lastSentAt: number;
+  sentCount: number;
+};
+
+const workers = new Map<string, WorkerState>();
+
+function getWorkerKey(session: string): string {
+  const s = String(session || '').trim();
+  const oldMatch = /^old-(\d+)$/i.exec(s);
+  if (oldMatch) return `pair-${Number(oldMatch[1]) || 0}`;
+
+  const newMatch = /^new-(\d+)$/i.exec(s);
+  if (newMatch) {
+    const n = Number(newMatch[1]) || 0;
+    // new-1,new-2 -> pair-1; new-3,new-4 -> pair-2; ...
+    return `pair-${Math.max(1, Math.ceil(n / 2))}`;
+  }
+
+  // Fallback: isolate unknown sessions into their own worker
+  return `session-${s}`;
+}
+
+function getWorker(session: string): WorkerState {
+  const key = getWorkerKey(session);
+  const existing = workers.get(key);
+  if (existing) return existing;
+  const created: WorkerState = { chain: Promise.resolve(), lastSentAt: 0, sentCount: 0 };
+  workers.set(key, created);
+  return created;
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -39,23 +68,25 @@ function randomBetweenMs(minMs: number, maxMs: number) {
  * This prevents parallel sends across webhook, campaign, and scheduler.
  */
 export function sendTextQueued(params: SendTextParams) {
-  chain = chain.then(async () => {
+  const worker = getWorker(params.session);
+
+  worker.chain = worker.chain.then(async () => {
     const baseDelay = randomBetweenMs(SEND_DELAY_MIN_MS, SEND_DELAY_MAX_MS);
     const every = clampNonNegative(SEND_COOLDOWN_EVERY);
-    const needCooldown = every > 0 && sentCount > 0 && sentCount % every === 0;
+    const needCooldown = every > 0 && worker.sentCount > 0 && worker.sentCount % every === 0;
     const cooldownDelay = needCooldown ? randomBetweenMs(SEND_COOLDOWN_MIN_MS, SEND_COOLDOWN_MAX_MS) : 0;
 
     const plannedDelay = baseDelay + cooldownDelay;
     if (plannedDelay > 0) {
       const now = Date.now();
-      const waitFor = Math.max(0, lastSentAt + plannedDelay - now);
+      const waitFor = Math.max(0, worker.lastSentAt + plannedDelay - now);
       if (waitFor > 0) await sleep(waitFor);
     }
 
     await wahaSendText(params);
-    lastSentAt = Date.now();
-    sentCount += 1;
+    worker.lastSentAt = Date.now();
+    worker.sentCount += 1;
   });
 
-  return chain;
+  return worker.chain;
 }
