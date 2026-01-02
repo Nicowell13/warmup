@@ -13,6 +13,12 @@ const SEND_COOLDOWN_EVERY = Number(process.env.SEND_COOLDOWN_EVERY || 5);
 const SEND_COOLDOWN_MIN_MS = Number(process.env.SEND_COOLDOWN_MIN_MS || 15_000);
 const SEND_COOLDOWN_MAX_MS = Number(process.env.SEND_COOLDOWN_MAX_MS || 30_000);
 
+const SEND_MAX_CONCURRENT_WORKERS = (() => {
+  const raw = Number(process.env.SEND_MAX_CONCURRENT_WORKERS ?? 2);
+  if (!Number.isFinite(raw)) return 2;
+  return Math.max(1, Math.floor(raw));
+})();
+
 type WorkerState = {
   chain: Promise<void>;
   lastSentAt: number;
@@ -63,6 +69,25 @@ function randomBetweenMs(minMs: number, maxMs: number) {
   return lo + Math.floor(Math.random() * (hi - lo + 1));
 }
 
+// Global concurrency limiter: cap active sends across all workers.
+let activeSends = 0;
+const sendWaiters: Array<() => void> = [];
+
+async function acquireSendPermit(): Promise<void> {
+  if (activeSends < SEND_MAX_CONCURRENT_WORKERS) {
+    activeSends += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => sendWaiters.push(resolve));
+  activeSends += 1;
+}
+
+function releaseSendPermit(): void {
+  activeSends = Math.max(0, activeSends - 1);
+  const next = sendWaiters.shift();
+  if (next) next();
+}
+
 /**
  * Serialize all outgoing WAHA sends in this API process.
  * This prevents parallel sends across webhook, campaign, and scheduler.
@@ -83,10 +108,12 @@ export function sendTextQueued(params: SendTextParams) {
       if (waitFor > 0) await sleep(waitFor);
     }
 
+    await acquireSendPermit();
     try {
       await wahaSendText(params);
       worker.sentCount += 1;
     } finally {
+      releaseSendPermit();
       // Keep pacing even if WAHA send fails (e.g. session logout),
       // so we don't hammer WAHA and we don't get stuck on a rejected chain.
       worker.lastSentAt = Date.now();

@@ -17,11 +17,12 @@ export default function SessionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const [maxSessions, setMaxSessions] = useState(15);
+
   const [initBusy, setInitBusy] = useState(false);
   const [statusMap, setStatusMap] = useState({});
 
-  const MAX_SESSIONS = 12;
-  const canCreateMore = sessions.length < MAX_SESSIONS;
+  const canCreateMore = sessions.length < maxSessions;
 
   const [createOpen, setCreateOpen] = useState(false);
   const [newSessionName, setNewSessionName] = useState('');
@@ -73,6 +74,20 @@ export default function SessionsPage() {
     if (!token) return;
     loadSessions(token);
     loadWahaStatus(token);
+
+    // Load preset to determine expected session cap (e.g. WA12 = 5 old + 10 new)
+    (async () => {
+      try {
+        const data = await apiFetch('/presets/wa12', { token });
+        const preset = data?.preset;
+        const oldCount = Array.isArray(preset?.oldSessionNames) ? preset.oldSessionNames.length : 0;
+        const newCount = Array.isArray(preset?.newSessionNames) ? preset.newSessionNames.length : 0;
+        const total = oldCount + newCount;
+        if (total > 0) setMaxSessions(total);
+      } catch {
+        // keep default
+      }
+    })();
   }, [token]);
 
   useEffect(() => {
@@ -440,7 +455,7 @@ export default function SessionsPage() {
                   </label>
 
                   <div className="rounded-xl border bg-gray-50 px-4 py-3 text-sm text-gray-700">
-                    Mode auto-reply memakai preset (script). Anda cukup pairing 12 session lalu jalankan campaign.
+                    Mode auto-reply memakai preset (script). Anda cukup pairing {maxSessions} session lalu jalankan campaign.
                   </div>
                 </div>
               </div>
@@ -453,7 +468,7 @@ export default function SessionsPage() {
 
           {!canCreateMore ? (
             <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Batas pembuatan session tercapai (maks. {MAX_SESSIONS}). Hapus salah satu session jika ingin membuat baru.
+              Batas pembuatan session tercapai (maks. {maxSessions}). Hapus salah satu session jika ingin membuat baru.
             </div>
           ) : null}
       </section>
@@ -474,7 +489,7 @@ export default function SessionsPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b px-6 py-4">
-              <div className="text-lg font-semibold">Buat Sesi Baru (maks. {MAX_SESSIONS})</div>
+              <div className="text-lg font-semibold">Buat Sesi Baru (maks. {maxSessions})</div>
               <button
                 type="button"
                 className="rounded-lg px-2 py-1 text-gray-500 hover:bg-gray-50"
@@ -503,7 +518,7 @@ export default function SessionsPage() {
                   className="mt-2 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-gray-900/20"
                   placeholder="Contoh: marketing-1"
                 />
-                <p className="mt-2 text-xs text-gray-500">Anda dapat membuat hingga {MAX_SESSIONS} sesi. Jika butuh lebih, silakan hubungi admin.</p>
+                <p className="mt-2 text-xs text-gray-500">Anda dapat membuat hingga {maxSessions} sesi. Jika butuh lebih, silakan hubungi admin.</p>
               </div>
 
               <div>

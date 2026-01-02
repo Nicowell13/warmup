@@ -352,18 +352,22 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const connectedSessionNames = Object.keys(sessionToChatIdMap);
 
   // 3) Gather OLD and NEW sessions (only connected ones)
-  const oldSessions = db
+  const oldSessionsUnsorted = db
     .listSessions()
     .filter((s) => requestedOldSessionNames.includes(s.wahaSession))
     .filter((s) => s.cluster === 'old')
     .filter((s) => connectedSessionNames.includes(s.wahaSession))
     .filter((s) => (s.autoReplyScriptText || '').trim().length > 0);
 
-  const newSessions = db
+  const newSessionsUnsorted = db
     .listSessions()
     .filter((s) => s.cluster === 'new')
     .filter((s) => connectedSessionNames.includes(s.wahaSession))
     .filter((s) => (s.autoReplyScriptText || '').trim().length > 0);
+
+  // Ensure deterministic ordering (old-1, old-2, ... and new-1, new-2, ...)
+  const oldSessions = [...oldSessionsUnsorted].sort((a, b) => a.wahaSession.localeCompare(b.wahaSession));
+  const newSessions = [...newSessionsUnsorted].sort((a, b) => a.wahaSession.localeCompare(b.wahaSession));
 
   if (oldSessions.length === 0) {
     return res.status(400).json({ error: 'Tidak ada session OLD siap dipakai untuk campaign.' });
@@ -396,11 +400,13 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     newToOldMap[cfg.newChatIds[i]] = oldSessions.map(s => s.wahaSession);
   }
 
-  // 4) Campaign initial send: OLD-1 sends line 1 (odd) to each NEW target
+  // 4) Campaign initial send: distribute starting OLD fairly across targets
   const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
-  for (const chatId of cfg.newChatIds) {
+  for (let i = 0; i < cfg.newChatIds.length; i++) {
+    const chatId = cfg.newChatIds[i];
     const oldRotation = newToOldMap[chatId]; // Array of OLD sessions
-    const oldSessionName = oldRotation[0]; // Start with first OLD (old-1)
+    const startOldIndex = i % oldRotation.length;
+    const oldSessionName = oldRotation[startOldIndex];
     const oldSession = db.getSessionByName(oldSessionName);
     if (!oldSession) {
       campaignResults.push({ chatId, fromSession: oldSessionName, ok: false, error: 'OLD session not found' });
@@ -419,7 +425,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         seasonIndex: picked.nextSeasonIndex,
         lineIndex: picked.nextLineIndex,
         messageCount: 1, // Initial count
-        lastOldIndex: 0, // Started with OLD index 0 (old-1)
+        lastOldIndex: startOldIndex,
         lastMessageAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -458,10 +464,13 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
   // Track cumulative message count dan OLD rotation per NEW target
   const targetState: Record<string, { messageCount: number; currentOldIndex: number }> = {};
-  for (const newChatId of cfg.newChatIds) {
+  for (let i = 0; i < cfg.newChatIds.length; i++) {
+    const newChatId = cfg.newChatIds[i];
+    const oldRotation = newToOldMap[newChatId];
+    const startOldIndex = i % oldRotation.length;
     targetState[newChatId] = {
       messageCount: 1, // Campaign initial sudah kirim 1 pesan
-      currentOldIndex: 1, // Mulai dari OLD-2 karena OLD-1 sudah kirim
+      currentOldIndex: startOldIndex + 1,
     };
   }
 
@@ -542,6 +551,8 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
           if (!oldChatIdForReply) {
             // Skip jika OLD session tidak connected
             console.warn(`⚠️  OLD session ${oldSessionName} not connected, skipping message`);
+            // Advance rotation so we don't get stuck retrying the same OLD
+            currentOldIndex++;
             continue;
           }
 
