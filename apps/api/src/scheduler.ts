@@ -37,6 +37,13 @@ export function startScheduler(options: SchedulerOptions = {}) {
             continue;
           }
 
+          if (task.kind === 'wa12-wave-reset') {
+            const pairs: Record<string, string> = (task as any)?.payload?.pairings || {};
+            db.replaceNewPairings(pairs);
+            db.markScheduledTask(task.id, 'sent');
+            continue;
+          }
+
         let chosen: any = null;
         if (task.senderSession) {
           // Orchestrated mode: task specifies exact sender

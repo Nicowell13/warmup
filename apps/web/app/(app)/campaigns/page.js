@@ -20,6 +20,10 @@ export default function CampaignsPage() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
 
+  const [automationId, setAutomationId] = useState('');
+  const [progress, setProgress] = useState(null);
+  const [progressError, setProgressError] = useState('');
+
   const [prefillBusy, setPrefillBusy] = useState(false);
 
   const apiBase = useMemo(() => getApiBaseUrl(), []);
@@ -79,11 +83,13 @@ export default function CampaignsPage() {
       const savedTargets = localStorage.getItem('campaigns.targetsText');
       const savedOld = localStorage.getItem('campaigns.oldSessionsText');
       const savedResult = localStorage.getItem('campaigns.lastResult');
+      const savedAutomationId = localStorage.getItem('campaigns.lastAutomationId');
       if (typeof savedTargets === 'string') setTargetsText(savedTargets);
       if (typeof savedOld === 'string') setOldSessionsText(savedOld);
       if (typeof savedResult === 'string' && savedResult.trim()) {
         setResult(JSON.parse(savedResult));
       }
+      if (typeof savedAutomationId === 'string') setAutomationId(savedAutomationId);
     } catch {
       // ignore
     }
@@ -113,6 +119,8 @@ export default function CampaignsPage() {
     setRunning(true);
     setError('');
     setResult(null);
+    setProgress(null);
+    setProgressError('');
 
     try {
       const newChatIds = (targetsText || '')
@@ -131,6 +139,16 @@ export default function CampaignsPage() {
         body: { newChatIds, oldSessionNames },
       });
       setResult(data);
+
+      const newAutomationId = data?.automation?.id || '';
+      if (newAutomationId) {
+        setAutomationId(newAutomationId);
+        try {
+          localStorage.setItem('campaigns.lastAutomationId', String(newAutomationId));
+        } catch {
+          // ignore
+        }
+      }
       try {
         localStorage.setItem('campaigns.lastResult', JSON.stringify(data));
       } catch {
@@ -146,6 +164,31 @@ export default function CampaignsPage() {
   const results = result?.campaign?.results || result?.results || [];
   const successCount = results?.filter((r) => r.ok).length || 0;
   const totalCount = results?.length || 0;
+
+  async function refreshProgress(currentAutomationId) {
+    const token = getToken();
+    if (!token) return;
+    if (!currentAutomationId) return;
+
+    try {
+      const data = await apiFetch(`/automations/${currentAutomationId}/progress`, { token });
+      setProgress(data);
+      setProgressError('');
+    } catch (e) {
+      setProgressError(e?.message || 'Gagal ambil progress');
+    }
+  }
+
+  useEffect(() => {
+    if (!automationId) return;
+    refreshProgress(automationId);
+    const t = setInterval(() => refreshProgress(automationId), 3000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [automationId]);
+
+  const summary = progress?.summary;
+  const nextDueAt = summary?.nextDueAt ? new Date(summary.nextDueAt) : null;
 
   return (
     <div className="space-y-6">
@@ -226,6 +269,80 @@ export default function CampaignsPage() {
           {typeof result?.scheduled === 'number' ? (
             <div className="rounded-xl border bg-gray-50 px-4 py-3 text-sm text-gray-700">Schedule dibuat: {result.scheduled} task</div>
           ) : null}
+
+          <div className="rounded-2xl border bg-white p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold">Live progress</h2>
+                <p className="mt-1 text-sm text-gray-600">Progress diambil dengan polling dari scheduler (auto update).</p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => refreshProgress(automationId)}
+                  disabled={!automationId}
+                  className="rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-2 text-sm text-gray-700">
+              <div>
+                Automation ID: <span className="font-mono">{automationId || '-'}</span>
+              </div>
+              {progressError ? <div className="text-sm text-red-700">{progressError}</div> : null}
+
+              {summary ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-xl border bg-gray-50 px-4 py-3">
+                    <div className="text-xs text-gray-600">Tasks</div>
+                    <div className="mt-1">
+                      Total: <span className="font-medium">{summary.total}</span>
+                    </div>
+                    <div>
+                      Pending: <span className="font-medium">{summary.pending}</span>
+                    </div>
+                    <div>
+                      Sent: <span className="font-medium">{summary.sent}</span>
+                    </div>
+                    <div>
+                      Error: <span className="font-medium text-red-700">{summary.error}</span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-gray-50 px-4 py-3">
+                    <div className="text-xs text-gray-600">Next</div>
+                    <div className="mt-1">
+                      Next due:{' '}
+                      <span className="font-medium">{nextDueAt ? nextDueAt.toLocaleString() : '-'}</span>
+                    </div>
+                    <div className="text-xs text-gray-500">(berdasarkan task pending tercepat)</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-gray-500">Jalankan campaign dulu untuk melihat progress.</div>
+              )}
+
+              {summary?.recentErrors?.length ? (
+                <div className="rounded-xl border bg-gray-50 p-4">
+                  <div className="mb-2 text-xs text-gray-600">Recent errors</div>
+                  <div className="space-y-1 text-xs">
+                    {summary.recentErrors.map((e, idx) => (
+                      <div key={`${e.dueAt}-${idx}`} className="flex flex-wrap gap-2">
+                        <span className="font-mono">{new Date(e.dueAt).toLocaleString()}</span>
+                        {e.senderSession ? <span className="font-mono">{e.senderSession}</span> : null}
+                        <span className="font-mono">{e.chatId}</span>
+                        {e.lastError ? <span className="text-gray-600">— {e.lastError}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       </section>
     </div>

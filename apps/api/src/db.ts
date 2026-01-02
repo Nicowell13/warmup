@@ -47,7 +47,7 @@ export type ScheduledTask = {
   automationId: string;
   dueAt: string; // ISO (UTC)
   chatId: string;
-  kind: 'script-next';
+  kind: 'script-next' | 'wa12-wave-reset';
   status: 'pending' | 'sent' | 'error';
   lastError?: string;
   updatedAt: string;
@@ -55,6 +55,23 @@ export type ScheduledTask = {
   senderSession?: string; // which session sends (if specified, overrides automation oldSessionNames pick)
   targetNewChatId?: string; // untuk tracking target NEW (jika OLD yang kirim)
   oldRotationIndex?: number; // index OLD session dalam rotation (0-4)
+  waveIndex?: number;
+  payload?: any;
+};
+
+export type AutomationProgressSummary = {
+  automationId: string;
+  total: number;
+  pending: number;
+  sent: number;
+  error: number;
+  nextDueAt: string | null;
+  recentErrors: Array<{
+    dueAt: string;
+    senderSession?: string;
+    chatId: string;
+    lastError?: string;
+  }>;
 };
 
 type DbShape = {
@@ -62,6 +79,7 @@ type DbShape = {
   chatProgress?: Record<string, Record<string, ChatProgress>>;
   automations?: AutomationRecord[];
   scheduledTasks?: ScheduledTask[];
+  newPairings?: Record<string, { oldChatId: string; updatedAt: string }>;
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -79,7 +97,7 @@ const DB_FILE = getDbFilePath();
 
 function readDb(): DbShape {
   if (!fs.existsSync(DB_FILE)) {
-    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [] };
+    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [], newPairings: {} };
   }
   const raw = fs.readFileSync(DB_FILE, 'utf8');
   const parsed = JSON.parse(raw) as DbShape;
@@ -88,6 +106,7 @@ function readDb(): DbShape {
     chatProgress: parsed.chatProgress || {},
     automations: parsed.automations || [],
     scheduledTasks: parsed.scheduledTasks || [],
+    newPairings: parsed.newPairings || {},
   };
 }
 
@@ -164,6 +183,51 @@ export const db = {
     return progress;
   },
 
+  getNewPairedOldChatId(newSession: string): string | null {
+    const dbState = readDb();
+    const v = dbState.newPairings?.[newSession];
+    return v?.oldChatId ? String(v.oldChatId) : null;
+  },
+
+  setNewPairedOldChatId(newSession: string, oldChatId: string): void {
+    const dbState = readDb();
+    if (!dbState.newPairings) dbState.newPairings = {};
+    dbState.newPairings[String(newSession)] = {
+      oldChatId: String(oldChatId),
+      updatedAt: new Date().toISOString(),
+    };
+    writeDb(dbState);
+  },
+
+  clearNewPairings(): void {
+    const dbState = readDb();
+    dbState.newPairings = {};
+    writeDb(dbState);
+  },
+
+  replaceNewPairings(pairs: Record<string, string>): void {
+    const dbState = readDb();
+    const now = new Date().toISOString();
+    dbState.newPairings = {};
+    for (const [newSession, oldChatId] of Object.entries(pairs || {})) {
+      dbState.newPairings[String(newSession)] = { oldChatId: String(oldChatId), updatedAt: now };
+    }
+    writeDb(dbState);
+  },
+
+  hasPendingScheduledTaskForSenderChat(senderSession: string, chatId: string, withinMs = 15 * 60 * 1000): boolean {
+    const dbState = readDb();
+    const now = Date.now();
+    const latest = new Date(now + Math.max(0, withinMs)).toISOString();
+    return (dbState.scheduledTasks || []).some(
+      (t) =>
+        t.status === 'pending' &&
+        String(t.senderSession || '') === String(senderSession) &&
+        String(t.chatId) === String(chatId) &&
+        t.dueAt <= latest
+    );
+  },
+
   listAutomations(): AutomationRecord[] {
     return readDb().automations || [];
   },
@@ -215,6 +279,52 @@ export const db = {
     }));
     dbState.scheduledTasks = [...existing, ...withMeta];
     writeDb(dbState);
+  },
+
+  listScheduledTasksForAutomation(automationId: string): ScheduledTask[] {
+    const dbState = readDb();
+    return (dbState.scheduledTasks || []).filter((t) => t.automationId === automationId);
+  },
+
+  getAutomationProgressSummary(automationId: string): AutomationProgressSummary {
+    const tasks = db.listScheduledTasksForAutomation(automationId);
+    let pending = 0;
+    let sent = 0;
+    let error = 0;
+    let nextDueAt: string | null = null;
+
+    for (const t of tasks) {
+      if (t.status === 'pending') {
+        pending += 1;
+        if (!nextDueAt || t.dueAt < nextDueAt) nextDueAt = t.dueAt;
+      } else if (t.status === 'sent') {
+        sent += 1;
+      } else if (t.status === 'error') {
+        error += 1;
+      }
+    }
+
+    const recentErrors = tasks
+      .filter((t) => t.status === 'error')
+      .slice()
+      .sort((a, b) => b.dueAt.localeCompare(a.dueAt))
+      .slice(0, 8)
+      .map((t) => ({
+        dueAt: t.dueAt,
+        senderSession: t.senderSession,
+        chatId: t.chatId,
+        lastError: t.lastError,
+      }));
+
+    return {
+      automationId,
+      total: tasks.length,
+      pending,
+      sent,
+      error,
+      nextDueAt,
+      recentErrors,
+    };
   },
 
   listDueScheduledTasks(nowIso: string, limit: number): ScheduledTask[] {

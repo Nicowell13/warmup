@@ -99,6 +99,16 @@ async function getSessionToChatIdMap(): Promise<Record<string, string>> {
   }
 }
 
+let sessionToChatIdCache: { value: Record<string, string>; expiresAt: number } | null = null;
+
+async function getSessionToChatIdMapCached(ttlMs = 30_000): Promise<Record<string, string>> {
+  const now = Date.now();
+  if (sessionToChatIdCache && now < sessionToChatIdCache.expiresAt) return sessionToChatIdCache.value;
+  const value = await getSessionToChatIdMap();
+  sessionToChatIdCache = { value, expiresAt: now + Math.max(1_000, ttlMs) };
+  return value;
+}
+
 
 app.get('/waha/sessions/status', requireAuth, async (_req, res) => {
   try {
@@ -369,6 +379,9 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const oldSessions = [...oldSessionsUnsorted].sort((a, b) => a.wahaSession.localeCompare(b.wahaSession));
   const newSessions = [...newSessionsUnsorted].sort((a, b) => a.wahaSession.localeCompare(b.wahaSession));
 
+  const oldIndexByName: Record<string, number> = {};
+  for (let i = 0; i < oldSessions.length; i++) oldIndexByName[oldSessions[i].wahaSession] = i;
+
   if (oldSessions.length === 0) {
     return res.status(400).json({ error: 'Tidak ada session OLD siap dipakai untuk campaign.' });
   }
@@ -386,32 +399,56 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     }
   }
 
-  // Map each NEW chatId to a NEW session (round-robin for even distribution)
-  const newSessionMap: Record<string, string> = {};
-  for (let i = 0; i < cfg.newChatIds.length; i++) {
-    newSessionMap[cfg.newChatIds[i]] = newSessions[i % newSessions.length].wahaSession;
+  // Map target NEW chatId -> NEW session.
+  // Prefer exact match based on WAHA connected phoneNumber (sessionToChatIdMap),
+  // otherwise fallback to round-robin NEW sessions.
+  const newChatIdToNewSession: Record<string, string> = {};
+  for (const ns of newSessions) {
+    const chatId = sessionToChatIdMap[ns.wahaSession];
+    if (chatId) newChatIdToNewSession[chatId] = ns.wahaSession;
   }
 
-  // Map each NEW chatId to an OLD session (rotating untuk distribusi merata)
-  // Rotating: OLD-1 → OLD-2 → OLD-3 → OLD-4 → OLD-5 untuk setiap NEW target
-  const newToOldMap: Record<string, string[]> = {};
-  for (let i = 0; i < cfg.newChatIds.length; i++) {
-    // Setiap NEW akan mendapat array 5 OLD sessions dalam urutan rotating
-    newToOldMap[cfg.newChatIds[i]] = oldSessions.map(s => s.wahaSession);
+  function parseNewIndex(name: string): number | null {
+    const m = /^new-(\d+)$/i.exec(String(name || '').trim());
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) && n > 0 ? n : null;
   }
 
-  // 4) Campaign initial send: distribute starting OLD fairly across targets
+  // Order targets by their NEW session index (new-1..new-10) so pairing is stable
+  // even if cfg.newChatIds arrives in a different order.
+  const orderedTargets = cfg.newChatIds
+    .map((chatId, i) => ({ chatId, i, newSessionName: newChatIdToNewSession[chatId] || '' }))
+    .sort((a, b) => {
+      const ai = parseNewIndex(a.newSessionName);
+      const bi = parseNewIndex(b.newSessionName);
+      if (ai != null && bi != null) return ai - bi;
+      if (ai != null) return -1;
+      if (bi != null) return 1;
+      return a.i - b.i;
+    })
+    .map((t) => t.chatId);
+
+  const newSessionFallbackMap: Record<string, string> = {};
+  for (let i = 0; i < cfg.newChatIds.length; i++) {
+    newSessionFallbackMap[cfg.newChatIds[i]] = newSessions[i % newSessions.length].wahaSession;
+  }
+
+  // Assign: 2 NEW targets per OLD, sequentially.
+  // Example (5 old, 10 new): old-1 -> new[0],new[1]; old-2 -> new[2],new[3]; ...
+  const assignedOldByNewChatId: Record<string, string> = {};
+  for (let i = 0; i < orderedTargets.length; i++) {
+    const oldIndex = Math.floor(i / 2) % oldSessions.length;
+    assignedOldByNewChatId[orderedTargets[i]] = oldSessions[oldIndex].wahaSession;
+  }
+
+  // 4) Campaign initial send: OLD sends first to each NEW target
   const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
-  for (let i = 0; i < cfg.newChatIds.length; i++) {
-    const chatId = cfg.newChatIds[i];
-    const oldRotation = newToOldMap[chatId]; // Array of OLD sessions
-    const startOldIndex = i % oldRotation.length;
-    const oldSessionName = oldRotation[startOldIndex];
-    const oldSession = db.getSessionByName(oldSessionName);
-    if (!oldSession) {
-      campaignResults.push({ chatId, fromSession: oldSessionName, ok: false, error: 'OLD session not found' });
-      continue;
-    }
+  for (let i = 0; i < orderedTargets.length; i++) {
+    const chatId = orderedTargets[i];
+    const oldIndex = Math.floor(i / 2) % oldSessions.length;
+    const oldSession = oldSessions[oldIndex];
+    const oldSessionName = oldSession.wahaSession;
     try {
       const parity = oldSession.scriptLineParity || 'odd';
       const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, 0, parity);
@@ -425,7 +462,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         seasonIndex: picked.nextSeasonIndex,
         lineIndex: picked.nextLineIndex,
         messageCount: 1, // Initial count
-        lastOldIndex: startOldIndex,
+        lastOldIndex: oldIndex,
         lastMessageAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
@@ -462,16 +499,11 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const counts = [cfg.day1MessagesPerNew, cfg.day2MessagesPerNew, cfg.day3MessagesPerNew];
   const tasks = [] as any[];
 
-  // Track cumulative message count dan OLD rotation per NEW target
-  const targetState: Record<string, { messageCount: number; currentOldIndex: number }> = {};
-  for (let i = 0; i < cfg.newChatIds.length; i++) {
-    const newChatId = cfg.newChatIds[i];
-    const oldRotation = newToOldMap[newChatId];
-    const startOldIndex = i % oldRotation.length;
-    targetState[newChatId] = {
-      messageCount: 1, // Campaign initial sudah kirim 1 pesan
-      currentOldIndex: startOldIndex + 1,
-    };
+  // Track cumulative message count per target to keep NEW/OLD alternation consistent across days.
+  // messageCount includes the initial campaign message (OLD), so next sender should be NEW.
+  const targetState: Record<string, { messageCount: number }> = {};
+  for (const newChatId of orderedTargets) {
+    targetState[newChatId] = { messageCount: 1 };
   }
 
   // Build tasks dengan rotating OLD sessions dan delay 1.5 jam setelah setiap 24 pesan
@@ -483,9 +515,19 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     const messagesCount = counts[dayOffset] ?? 0;
     if (messagesCount <= 0) continue;
 
-    for (const newChatId of cfg.newChatIds) {
-      const newSessionForThisTarget = newSessionMap[newChatId];
-      const oldRotation = newToOldMap[newChatId]; // Array of 5 OLD sessions
+    for (let targetIndex = 0; targetIndex < orderedTargets.length; targetIndex += 1) {
+      const newChatId = orderedTargets[targetIndex];
+      const oldSessionName = assignedOldByNewChatId[newChatId] || oldSessions[Math.floor(targetIndex / 2) % oldSessions.length].wahaSession;
+      const oldChatIdForReply = oldSessionChatIds[oldSessionName];
+      if (!oldChatIdForReply) {
+        console.warn(`⚠️  OLD session ${oldSessionName} not connected, skipping orchestrated schedule for target ${newChatId}`);
+        continue;
+      }
+
+      const newSessionForThisTarget =
+        newChatIdToNewSession[newChatId] ||
+        newSessionFallbackMap[newChatId] ||
+        newSessions[targetIndex % newSessions.length].wahaSession;
       
       // Untuk day 1, kurangi 1 karena campaign initial sudah kirim
       const remainingMessages = dayOffset === 0 ? messagesCount - 1 : messagesCount;
@@ -521,68 +563,13 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       
       times = timesWithDelays;
 
-      // Get OLD chat IDs untuk semua OLD sessions
-      const oldChatIds: Record<string, string> = {};
-      for (const oldSessionName of oldRotation) {
-        if (oldSessionChatIds[oldSessionName]) {
-          oldChatIds[oldSessionName] = oldSessionChatIds[oldSessionName];
-        }
-      }
-
-      // Cek apakah semua OLD sessions connected
-      const connectedOldSessions = oldRotation.filter(name => oldChatIds[name]);
-      if (connectedOldSessions.length === 0) {
-        console.warn(`⚠️  No OLD sessions connected, skipping orchestrated schedule for target ${newChatId}`);
-        continue;
-      }
-
-      // Build tasks dengan rotating OLD (lanjutkan dari state sebelumnya)
-      let currentOldIndex = state.currentOldIndex;
-      
+      // Build tasks: alternate sender based on messageCount state.
+      // After the initial campaign (OLD), the next sender must be NEW.
       for (let i = 0; i < times.length; i += 1) {
-        const isOddIndex = i % 2 === 0;
-        
-        if (isOddIndex) {
-          // OLD kirim ke NEW
-          // Rotating: gunakan OLD sesuai urutan
-          const oldSessionName = oldRotation[currentOldIndex % oldRotation.length];
-          const oldChatIdForReply = oldChatIds[oldSessionName];
-          
-          if (!oldChatIdForReply) {
-            // Skip jika OLD session tidak connected
-            console.warn(`⚠️  OLD session ${oldSessionName} not connected, skipping message`);
-            // Advance rotation so we don't get stuck retrying the same OLD
-            currentOldIndex++;
-            continue;
-          }
+        const nextIsNew = state.messageCount % 2 === 1;
 
-          tasks.push({
-            id: randomUUID(),
-            automationId,
-            dueAt: times[i].toUTC().toISO()!,
-            chatId: newChatId,
-            senderSession: oldSessionName,
-            kind: 'script-next',
-            status: 'pending',
-            targetNewChatId: newChatId, // Track target NEW
-            oldRotationIndex: currentOldIndex % oldRotation.length, // Track OLD index
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-          
-          // Move to next OLD session
-          currentOldIndex++;
-        } else {
-          // NEW balas ke OLD yang terakhir kirim
-          const lastOldIndex = (currentOldIndex - 1) % oldRotation.length;
-          const lastOldSessionName = oldRotation[lastOldIndex];
-          const oldChatIdForReply = oldChatIds[lastOldSessionName];
-          
-          if (!oldChatIdForReply) {
-            console.warn(`⚠️  OLD session ${lastOldSessionName} not connected, skipping reply`);
-            continue;
-          }
-
+        if (nextIsNew) {
+          // NEW replies to OLD's chatId
           tasks.push({
             id: randomUUID(),
             automationId,
@@ -594,12 +581,25 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           });
+        } else {
+          // OLD sends to NEW target
+          tasks.push({
+            id: randomUUID(),
+            automationId,
+            dueAt: times[i].toUTC().toISO()!,
+            chatId: newChatId,
+            senderSession: oldSessionName,
+            kind: 'script-next',
+            status: 'pending',
+            targetNewChatId: newChatId,
+            oldRotationIndex: oldIndexByName[oldSessionName] ?? 0,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
         }
+
+        state.messageCount += 1;
       }
-      
-      // Update state untuk hari berikutnya
-      targetState[newChatId].messageCount += remainingMessages;
-      targetState[newChatId].currentOldIndex = currentOldIndex;
     }
   }
 
@@ -837,6 +837,17 @@ app.get('/automations', requireAuth, (_req, res) => {
   res.json({ automations: db.listAutomations() });
 });
 
+app.get('/automations/:id/progress', requireAuth, (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ error: 'Missing automation id' });
+
+  const automation = db.getAutomationById(id);
+  if (!automation) return res.status(404).json({ error: 'Not found' });
+
+  const summary = db.getAutomationProgressSummary(id);
+  return res.json({ ok: true, automation, summary });
+});
+
 app.delete('/automations/:id', requireAuth, (req, res) => {
   const ok = db.deleteAutomation(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Not found' });
@@ -981,6 +992,32 @@ app.post('/waha/webhook', async (req, res) => {
     if (!config?.autoReplyEnabled) {
       debug('ignored:no_config_or_disabled', { session, chatId, hasConfig: !!config });
       return res.status(200).json({ ok: true, ignored: true });
+    }
+
+    // Safety: NEW sessions allow-first-contact with an OLD.
+    // - If NEW has no stored paired OLD, bind to the first inbound OLD chatId.
+    // - After bound, NEW only replies to that OLD chatId.
+    if ((config.cluster || 'old') === 'new') {
+      const map = await getSessionToChatIdMapCached();
+      const chatIdToSession: Record<string, string> = {};
+      for (const [name, cid] of Object.entries(map)) {
+        if (cid) chatIdToSession[String(cid)] = String(name);
+      }
+
+      const inboundSessionName = chatIdToSession[String(chatId)] || '';
+      const inboundIsOld = /^old-(\d+)$/i.test(inboundSessionName);
+
+      // Only enforce pairing when talking to known OLD sessions.
+      if (inboundIsOld) {
+        const existingPair = db.getNewPairedOldChatId(config.wahaSession);
+        if (!existingPair) {
+          db.setNewPairedOldChatId(config.wahaSession, String(chatId));
+          debug('paired:new_first_contact', { session, chatId, inboundSessionName });
+        } else if (String(chatId) !== String(existingPair)) {
+          debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
+          return res.status(200).json({ ok: true, ignored: true });
+        }
+      }
     }
 
     const mode = config.autoReplyMode || 'static';
