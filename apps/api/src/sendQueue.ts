@@ -70,7 +70,7 @@ function randomBetweenMs(minMs: number, maxMs: number) {
 export function sendTextQueued(params: SendTextParams) {
   const worker = getWorker(params.session);
 
-  worker.chain = worker.chain.then(async () => {
+  const operation = worker.chain.then(async () => {
     const baseDelay = randomBetweenMs(SEND_DELAY_MIN_MS, SEND_DELAY_MAX_MS);
     const every = clampNonNegative(SEND_COOLDOWN_EVERY);
     const needCooldown = every > 0 && worker.sentCount > 0 && worker.sentCount % every === 0;
@@ -83,10 +83,18 @@ export function sendTextQueued(params: SendTextParams) {
       if (waitFor > 0) await sleep(waitFor);
     }
 
-    await wahaSendText(params);
-    worker.lastSentAt = Date.now();
-    worker.sentCount += 1;
+    try {
+      await wahaSendText(params);
+      worker.sentCount += 1;
+    } finally {
+      // Keep pacing even if WAHA send fails (e.g. session logout),
+      // so we don't hammer WAHA and we don't get stuck on a rejected chain.
+      worker.lastSentAt = Date.now();
+    }
   });
 
-  return worker.chain;
+  // Keep the worker chain alive even if this operation fails,
+  // while still returning a rejected promise to the caller.
+  worker.chain = operation.catch(() => undefined);
+  return operation;
 }
