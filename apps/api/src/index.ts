@@ -541,7 +541,13 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   
   const MESSAGES_PER_NEW_PER_WAVE = 24;
   const BASE_DELAY_MINUTES = 2;
-  const numWaves = oldSessions.length;
+  
+  // Group targets by their assigned OLD session
+  const targetsByOld: Record<string, string[]> = {};
+  for (const [newChatId, oldSessionName] of Object.entries(assignedOldByNewChatId)) {
+    if (!targetsByOld[oldSessionName]) targetsByOld[oldSessionName] = [];
+    targetsByOld[oldSessionName].push(newChatId);
+  }
   
   // Build full pairing map (all NEW → their assigned OLD chatId)
   const fullPairingMap: Record<string, string> = {};
@@ -564,51 +570,63 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   db.replaceNewPairings(fullPairingMap);
   console.log(`🔗 Pairing set: ${Object.keys(fullPairingMap).length} NEW sessions paired`);
 
-  let taskTime = now.plus({ minutes: 1 }); // Start 1 minute after OLD blast
+  // Start wave tasks 14-20 seconds after OLD blast (random to avoid pattern)
+  const initialDelaySeconds = 14 + Math.floor(Math.random() * 7); // 14-20 seconds
+  let taskTime = now.plus({ seconds: initialDelaySeconds });
+  console.log(`⏰ Wave tasks will start in ${initialDelaySeconds} seconds`);
   
-  // Generate tasks: Round-robin through pairs
-  // Each pair does: OLD→NEW, NEW→OLD (2 messages per "round")
-  // After all pairs complete 1 round, move to next round
+  // Generate tasks: Round-robin through OLD sessions
+  // Round 1: OLD-1 pair-1, OLD-2 pair-1, OLD-3 pair-1, OLD-1 pair-2, OLD-2 pair-2...
   for (let roundIndex = 0; roundIndex < MESSAGES_PER_NEW_PER_WAVE; roundIndex++) {
-    // Each round: every pair exchanges 1 OLD→NEW + 1 NEW→OLD
-    for (let i = 0; i < orderedTargets.length; i++) {
-      const newChatId = orderedTargets[i];
-      const oldSessionName = assignedOldByNewChatId[newChatId];
-      const oldChatId = oldSessionChatIds[oldSessionName];
-      const newSessionName =
-        newChatIdToNewSession[newChatId] ||
-        newSessionFallbackMap[newChatId] ||
-        newSessions[0]?.wahaSession;
-      
-      if (!oldChatId || !newSessionName) continue;
+    // Find max pairs any OLD has
+    const maxPairs = Math.max(...oldSessions.map(os => (targetsByOld[os.wahaSession] || []).length));
+    
+    // For each pair slot, rotate through OLD sessions
+    for (let pairSlot = 0; pairSlot < maxPairs; pairSlot++) {
+      for (const oldSession of oldSessions) {
+        const oldSessionName = oldSession.wahaSession;
+        const oldTargets = targetsByOld[oldSessionName] || [];
+        
+        // Skip if this OLD doesn't have a target at this pair slot
+        if (pairSlot >= oldTargets.length) continue;
+        
+        const newChatId = oldTargets[pairSlot];
+        const oldChatId = oldSessionChatIds[oldSessionName];
+        const newSessionName =
+          newChatIdToNewSession[newChatId] ||
+          newSessionFallbackMap[newChatId] ||
+          newSessions[0]?.wahaSession;
+        
+        if (!oldChatId || !newSessionName) continue;
 
-      // OLD → NEW
-      tasks.push({
-        id: randomUUID(),
-        automationId,
-        dueAt: taskTime.toUTC().toISO()!,
-        chatId: newChatId,
-        senderSession: oldSessionName,
-        kind: 'script-next',
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      taskTime = taskTime.plus({ minutes: BASE_DELAY_MINUTES });
+        // OLD → NEW
+        tasks.push({
+          id: randomUUID(),
+          automationId,
+          dueAt: taskTime.toUTC().toISO()!,
+          chatId: newChatId,
+          senderSession: oldSessionName,
+          kind: 'script-next',
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        taskTime = taskTime.plus({ minutes: BASE_DELAY_MINUTES });
 
-      // NEW → OLD
-      tasks.push({
-        id: randomUUID(),
-        automationId,
-        dueAt: taskTime.toUTC().toISO()!,
-        chatId: oldChatId,
-        senderSession: newSessionName,
-        kind: 'script-next',
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      taskTime = taskTime.plus({ minutes: BASE_DELAY_MINUTES });
+        // NEW → OLD
+        tasks.push({
+          id: randomUUID(),
+          automationId,
+          dueAt: taskTime.toUTC().toISO()!,
+          chatId: oldChatId,
+          senderSession: newSessionName,
+          kind: 'script-next',
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        taskTime = taskTime.plus({ minutes: BASE_DELAY_MINUTES });
+      }
     }
   }
   
