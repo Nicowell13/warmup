@@ -57,6 +57,11 @@ cd /opt
 git clone https://github.com/yourusername/warmup.git warmup-app2
 cd warmup-app2
 
+# Setup .env.local untuk app2
+cp .env.app2.example apps/api/.env.local
+nano apps/api/.env.local
+# Edit: JWT_SECRET, ADMIN_PASSWORD, WAHA_API_KEY
+
 # Build dan run dengan docker-compose.app2.yml
 docker-compose -f docker-compose.app2.yml up -d
 
@@ -74,6 +79,12 @@ docker-compose -f docker-compose.app2.yml logs -f
 cd /opt
 git clone https://github.com/yourusername/warmup.git warmup-app3
 cd warmup-app3
+
+# Setup .env.local untuk app3
+cp .env.app2.example apps/api/.env.local
+nano apps/api/.env.local
+# Edit: JWT_SECRET, ADMIN_PASSWORD, WAHA_API_KEY
+# Jika dedicated WAHA, ganti WAHA_BASE_URL ke port 3003
 
 docker-compose -f docker-compose.app3.yml up -d
 docker-compose -f docker-compose.app3.yml logs -f

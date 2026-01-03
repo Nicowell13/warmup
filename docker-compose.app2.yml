@@ -5,8 +5,7 @@
 services:
   web:
     build:
-      context: .
-      dockerfile: apps/web/Dockerfile
+      context: ./apps/web
     ports:
       - "3001:3000"  # Port host 3001 (berbeda dari app1)
     environment:
@@ -17,18 +16,18 @@ services:
 
   api:
     build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+      context: ./apps/api
     ports:
       - "4001:4000"  # Port host 4001 (berbeda dari app1)
+    env_file:
+      - ./apps/api/.env.local
     environment:
+      - NODE_ENV=production
       - PORT=4000
-      - WAHA_URL=http://host.docker.internal:3001  # Shared WAHA
+      - WAHA_BASE_URL=http://host.docker.internal:3001  # Shared WAHA
       # Atau gunakan dedicated: http://host.docker.internal:3002
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=changeme123
     volumes:
-      - ./apps/data:/app/apps/api/data  # Data terpisah per app
+      - ./apps/data:/app/data  # Data terpisah per app
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
