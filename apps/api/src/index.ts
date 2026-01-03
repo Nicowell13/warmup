@@ -459,43 +459,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     assignedOldByNewChatId[orderedTargets[i]] = oldSessions[oldIndex].wahaSession;
   }
 
-  // 4) Campaign initial send: OLD sends first to each NEW target
-  // Suppress NEW auto-replies while we blast from OLD and build scheduled tasks.
-  // This prevents NEW webhook from firing immediately (spiky pattern / inconsistent pairing).
-  db.setSuppressNewAutoReplyUntil(DateTime.now().plus({ days: 7 }).toUTC().toISO()!);
-
-  const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
-  for (let i = 0; i < orderedTargets.length; i++) {
-    const chatId = orderedTargets[i];
-    const oldIndex = Math.floor(i / 2) % oldSessions.length;
-    const oldSession = oldSessions[oldIndex];
-    const oldSessionName = oldSession.wahaSession;
-    try {
-      const parity = oldSession.scriptLineParity || 'odd';
-      const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, 0, parity);
-      if (!picked) {
-        campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
-        continue;
-      }
-
-      await sendTextQueued({ session: oldSession.wahaSession, chatId: String(chatId), text: picked.text });
-      db.setChatProgress(oldSession.wahaSession, String(chatId), {
-        seasonIndex: picked.nextSeasonIndex,
-        lineIndex: picked.nextLineIndex,
-        messageCount: 1, // Initial count
-        lastOldIndex: oldIndex,
-        lastMessageAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-
-      campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: true });
-    } catch (e: any) {
-      campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: e?.message || 'unknown' });
-    }
-  }
-
-  // 5) Build orchestrated conversation schedule
-  // For each target NEW, we alternate OLD → NEW → OLD → NEW over 3 days
+  // 4) Create automation record first (before heavy work)
   const automationId = randomUUID();
   const automationName = String(req.body?.name || `wa12-${new Date().toISOString().slice(0, 10)}`);
   const startDate = now.toISODate()!;
@@ -516,6 +480,59 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   });
+
+  // 5) Return response immediately - don't block client
+  res.json({
+    ok: true,
+    automation,
+    status: 'starting',
+    message: 'Campaign is starting. OLD blast will begin shortly, then wave tasks will be scheduled.',
+    targets: orderedTargets.length,
+    waves: oldSessions.length,
+  });
+
+  // 6) Run campaign blast + wave generation in background
+  (async () => {
+    try {
+      console.log(`🚀 Starting campaign ${automationId}: ${orderedTargets.length} targets, ${oldSessions.length} waves`);
+      
+      // Suppress NEW auto-replies while we blast from OLD and build scheduled tasks.
+      // This prevents NEW webhook from firing immediately (spiky pattern / inconsistent pairing).
+      db.setSuppressNewAutoReplyUntil(DateTime.now().plus({ days: 7 }).toUTC().toISO()!);
+
+      // Campaign initial send: OLD sends first to each NEW target
+      const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
+      for (let i = 0; i < orderedTargets.length; i++) {
+        const chatId = orderedTargets[i];
+        const oldIndex = Math.floor(i / 2) % oldSessions.length;
+        const oldSession = oldSessions[oldIndex];
+        const oldSessionName = oldSession.wahaSession;
+        try {
+          const parity = oldSession.scriptLineParity || 'odd';
+          const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, 0, parity);
+          if (!picked) {
+            campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
+            continue;
+          }
+
+          await sendTextQueued({ session: oldSession.wahaSession, chatId: String(chatId), text: picked.text });
+          db.setChatProgress(oldSession.wahaSession, String(chatId), {
+            seasonIndex: picked.nextSeasonIndex,
+            lineIndex: picked.nextLineIndex,
+            messageCount: 1, // Initial count
+            lastOldIndex: oldIndex,
+            lastMessageAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+
+          campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: true });
+        } catch (e: any) {
+          campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: e?.message || 'unknown' });
+        }
+      }
+
+      const successCount = campaignResults.filter(r => r.ok).length;
+      console.log(`✅ OLD blast complete: ${successCount}/${orderedTargets.length} sent successfully`);
 
   const tasks = [] as any[];
 
@@ -660,15 +677,17 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     db.setSuppressNewAutoReplyUntil(null);
   }
 
-  return res.json({
-    ok: true,
-    campaign: { results: campaignResults },
-    automation,
-    scheduled: tasks.length,
-    mode: 'wave-orchestrated',
-    waves: numWaves,
-    messagesPerWave: MESSAGES_PER_NEW_PER_WAVE * 2 * (targetsByOld[oldSessions[0]?.wahaSession]?.length || 1),
-  });
+      console.log(`🎉 Campaign ${automationId} fully initialized: ${tasks.length} wave tasks scheduled`);
+    } catch (error: any) {
+      console.error(`❌ Campaign ${automationId} background initialization failed:`, error);
+      // Mark automation as failed
+      db.upsertAutomation({
+        ...automation,
+        active: false,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  })(); // Run in background, don't await
 });
 
 app.get('/sessions', requireAuth, (_req, res) => {
