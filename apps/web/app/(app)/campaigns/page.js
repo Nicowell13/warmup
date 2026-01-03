@@ -179,6 +179,20 @@ export default function CampaignsPage() {
     }
   }
 
+  async function stopCampaign() {
+    const token = getToken();
+    if (!token) return;
+    if (!automationId) return;
+
+    setProgressError('');
+    try {
+      await apiFetch(`/automations/${automationId}/stop`, { token, method: 'POST' });
+      await refreshProgress(automationId);
+    } catch (e) {
+      setProgressError(e?.message || 'Gagal stop campaign');
+    }
+  }
+
   useEffect(() => {
     if (!automationId) return;
     refreshProgress(automationId);
@@ -285,6 +299,15 @@ export default function CampaignsPage() {
                   className="rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
                 >
                   Refresh
+                </button>
+
+                <button
+                  type="button"
+                  onClick={stopCampaign}
+                  disabled={!automationId}
+                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-60"
+                >
+                  Stop Campaign
                 </button>
               </div>
             </div>

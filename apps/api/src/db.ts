@@ -80,6 +80,9 @@ type DbShape = {
   automations?: AutomationRecord[];
   scheduledTasks?: ScheduledTask[];
   newPairings?: Record<string, { oldChatId: string; updatedAt: string }>;
+  flags?: {
+    suppressNewAutoReplyUntil?: string | null;
+  };
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -97,7 +100,7 @@ const DB_FILE = getDbFilePath();
 
 function readDb(): DbShape {
   if (!fs.existsSync(DB_FILE)) {
-    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [], newPairings: {} };
+    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [], newPairings: {}, flags: {} };
   }
   const raw = fs.readFileSync(DB_FILE, 'utf8');
   const parsed = JSON.parse(raw) as DbShape;
@@ -107,6 +110,7 @@ function readDb(): DbShape {
     automations: parsed.automations || [],
     scheduledTasks: parsed.scheduledTasks || [],
     newPairings: parsed.newPairings || {},
+    flags: parsed.flags || {},
   };
 }
 
@@ -115,6 +119,18 @@ function writeDb(db: DbShape) {
 }
 
 export const db = {
+  getSuppressNewAutoReplyUntil(): string | null {
+    const dbState = readDb();
+    const v = dbState.flags?.suppressNewAutoReplyUntil;
+    return v ? String(v) : null;
+  },
+
+  setSuppressNewAutoReplyUntil(valueIsoOrNull: string | null): void {
+    const dbState = readDb();
+    if (!dbState.flags) dbState.flags = {};
+    dbState.flags.suppressNewAutoReplyUntil = valueIsoOrNull ? String(valueIsoOrNull) : null;
+    writeDb(dbState);
+  },
   listSessions(): SessionRecord[] {
     return readDb().sessions;
   },
@@ -266,6 +282,25 @@ export const db = {
       return true;
     }
     return false;
+  },
+
+  cancelPendingScheduledTasksForAutomation(automationId: string, reason = 'stopped'): number {
+    const dbState = readDb();
+    const now = new Date().toISOString();
+    let changed = 0;
+    dbState.scheduledTasks = (dbState.scheduledTasks || []).map((t) => {
+      if (t.automationId !== automationId) return t;
+      if (t.status !== 'pending') return t;
+      changed += 1;
+      return {
+        ...t,
+        status: 'error',
+        lastError: reason,
+        updatedAt: now,
+      };
+    });
+    writeDb(dbState);
+    return changed;
   },
 
   replaceScheduledTasksForAutomation(automationId: string, tasks: ScheduledTask[]) {

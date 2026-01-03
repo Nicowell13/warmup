@@ -232,6 +232,7 @@ function getWa12RuntimeConfig(reqBody: any): {
   day1MessagesPerNew: number;
   day2MessagesPerNew: number;
   day3MessagesPerNew: number;
+  firstReplyDelayMinutes: number;
 } {
   const bodyNewChatIds = Array.isArray(reqBody?.newChatIds) ? reqBody.newChatIds : null;
   const envNewChatIds = parseListEnv(process.env.WA12_NEW_CHAT_IDS);
@@ -247,6 +248,10 @@ function getWa12RuntimeConfig(reqBody: any): {
     day1MessagesPerNew: Number(reqBody?.day1MessagesPerNew ?? process.env.WA12_DAY1 ?? WA12_PRESET.automationDefaults.day1MessagesPerNew),
     day2MessagesPerNew: Number(reqBody?.day2MessagesPerNew ?? process.env.WA12_DAY2 ?? WA12_PRESET.automationDefaults.day2MessagesPerNew),
     day3MessagesPerNew: Number(reqBody?.day3MessagesPerNew ?? process.env.WA12_DAY3 ?? WA12_PRESET.automationDefaults.day3MessagesPerNew),
+    firstReplyDelayMinutes: Math.max(
+      0,
+      Number(reqBody?.firstReplyDelayMinutes ?? process.env.WA12_FIRST_REPLY_DELAY_MINUTES ?? 30)
+    ),
   };
 }
 
@@ -443,6 +448,10 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   }
 
   // 4) Campaign initial send: OLD sends first to each NEW target
+  // Suppress NEW auto-replies while we blast from OLD and build scheduled tasks.
+  // This prevents NEW webhook from firing immediately (spiky pattern / inconsistent pairing).
+  db.setSuppressNewAutoReplyUntil(DateTime.now().plus({ days: 7 }).toUTC().toISO()!);
+
   const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
   for (let i = 0; i < orderedTargets.length; i++) {
     const chatId = orderedTargets[i];
@@ -499,6 +508,26 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const counts = [cfg.day1MessagesPerNew, cfg.day2MessagesPerNew, cfg.day3MessagesPerNew];
   const tasks = [] as any[];
 
+  // Phase-based: lock pairing NEW->OLD in DB so webhook (if ever enabled later) stays consistent.
+  const pairingMap: Record<string, string> = {};
+  for (let targetIndex = 0; targetIndex < orderedTargets.length; targetIndex += 1) {
+    const newChatId = orderedTargets[targetIndex];
+    const oldSessionName = assignedOldByNewChatId[newChatId] || oldSessions[Math.floor(targetIndex / 2) % oldSessions.length].wahaSession;
+    const oldChatIdForReply = oldSessionChatIds[oldSessionName];
+    if (!oldChatIdForReply) continue;
+
+    const newSessionForThisTarget =
+      newChatIdToNewSession[newChatId] ||
+      newSessionFallbackMap[newChatId] ||
+      newSessions[targetIndex % newSessions.length].wahaSession;
+
+    pairingMap[String(newSessionForThisTarget)] = String(oldChatIdForReply);
+  }
+
+  if (Object.keys(pairingMap).length > 0) {
+    db.replaceNewPairings(pairingMap);
+  }
+
   // Track cumulative message count per target to keep NEW/OLD alternation consistent across days.
   // messageCount includes the initial campaign message (OLD), so next sender should be NEW.
   const targetState: Record<string, { messageCount: number }> = {};
@@ -530,12 +559,22 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         newSessions[targetIndex % newSessions.length].wahaSession;
       
       // Untuk day 1, kurangi 1 karena campaign initial sudah kirim
+      // Untuk day 1, kurangi 2 karena:
+      // - campaign initial (OLD)
+      // - immediate NEW reply (scheduled right after blast)
       const remainingMessages = dayOffset === 0 ? messagesCount - 1 : messagesCount;
       
       if (remainingMessages <= 0) continue;
 
       // Generate times
-      let times = randomTimesBetween(start, end, remainingMessages);
+      // Avoid generating tasks in the past (can cause sudden bursts).
+      const minDelay = Math.max(0, Number(cfg.firstReplyDelayMinutes || 0));
+      const safeStart = (dayOffset === 0)
+        ? DateTime.max(start, now.plus({ minutes: Math.max(1, minDelay) }))
+        : start;
+      if (safeStart >= end) continue;
+
+      let times = randomTimesBetween(safeStart, end, remainingMessages);
       
       // Tambahkan delay 1.5 jam setiap mencapai kelipatan 24 pesan
       const state = targetState[newChatId];
@@ -604,6 +643,18 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   }
 
   db.replaceScheduledTasksForAutomation(automationId, tasks);
+
+  // Keep NEW webhook suppressed until the last scheduled task is done (+1 hour), then it can safely resume.
+  let maxDueAt: string | null = null;
+  for (const t of tasks) {
+    if (!maxDueAt || String(t.dueAt) > maxDueAt) maxDueAt = String(t.dueAt);
+  }
+  if (maxDueAt) {
+    const until = DateTime.fromISO(maxDueAt, { zone: 'utc' }).plus({ hours: 1 }).toUTC().toISO()!;
+    db.setSuppressNewAutoReplyUntil(until);
+  } else {
+    db.setSuppressNewAutoReplyUntil(null);
+  }
 
   return res.json({
     ok: true,
@@ -848,6 +899,28 @@ app.get('/automations/:id/progress', requireAuth, (req, res) => {
   return res.json({ ok: true, automation, summary });
 });
 
+app.post('/automations/:id/stop', requireAuth, (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!id) return res.status(400).json({ error: 'Missing automation id' });
+
+  const automation = db.getAutomationById(id);
+  if (!automation) return res.status(404).json({ error: 'Not found' });
+
+  const updated = db.upsertAutomation({
+    ...automation,
+    active: false,
+    updatedAt: new Date().toISOString(),
+  });
+
+  const canceled = db.cancelPendingScheduledTasksForAutomation(id, 'stopped');
+
+  // Safety: if we were suppressing NEW webhook for this run, stop should release it.
+  db.setSuppressNewAutoReplyUntil(null);
+
+  const summary = db.getAutomationProgressSummary(id);
+  return res.json({ ok: true, automation: updated, canceled, summary });
+});
+
 app.delete('/automations/:id', requireAuth, (req, res) => {
   const ok = db.deleteAutomation(req.params.id);
   if (!ok) return res.status(404).json({ error: 'Not found' });
@@ -994,10 +1067,26 @@ app.post('/waha/webhook', async (req, res) => {
       return res.status(200).json({ ok: true, ignored: true });
     }
 
+    // If this exact sender+chat is already handled by scheduled tasks, don't double-send via webhook.
+    // This keeps orchestrated runs deterministic.
+    if (db.hasPendingScheduledTaskForSenderChat(config.wahaSession, String(chatId), 24 * 60 * 60 * 1000)) {
+      debug('ignored:has_pending_scheduled_task', { session, chatId });
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+
     // Safety: NEW sessions allow-first-contact with an OLD.
     // - If NEW has no stored paired OLD, bind to the first inbound OLD chatId.
     // - After bound, NEW only replies to that OLD chatId.
     if ((config.cluster || 'old') === 'new') {
+      const suppressUntilIso = db.getSuppressNewAutoReplyUntil();
+      if (suppressUntilIso) {
+        const until = DateTime.fromISO(String(suppressUntilIso), { zone: 'utc' });
+        if (until.isValid && DateTime.now().toUTC() < until) {
+          debug('ignored:new_suppressed_by_phase', { session, chatId, suppressUntilIso });
+          return res.status(200).json({ ok: true, ignored: true });
+        }
+      }
+
       const map = await getSessionToChatIdMapCached();
       const chatIdToSession: Record<string, string> = {};
       for (const [name, cid] of Object.entries(map)) {
@@ -1007,16 +1096,21 @@ app.post('/waha/webhook', async (req, res) => {
       const inboundSessionName = chatIdToSession[String(chatId)] || '';
       const inboundIsOld = /^old-(\d+)$/i.test(inboundSessionName);
 
+      // NEW sessions should only participate in conversations with OLD sessions.
+      // This prevents NEW auto-replying to other NEW sessions / external chats.
+      if (!inboundIsOld) {
+        debug('ignored:new_inbound_not_old', { session, chatId, inboundSessionName });
+        return res.status(200).json({ ok: true, ignored: true });
+      }
+
       // Only enforce pairing when talking to known OLD sessions.
-      if (inboundIsOld) {
-        const existingPair = db.getNewPairedOldChatId(config.wahaSession);
-        if (!existingPair) {
-          db.setNewPairedOldChatId(config.wahaSession, String(chatId));
-          debug('paired:new_first_contact', { session, chatId, inboundSessionName });
-        } else if (String(chatId) !== String(existingPair)) {
-          debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
-          return res.status(200).json({ ok: true, ignored: true });
-        }
+      const existingPair = db.getNewPairedOldChatId(config.wahaSession);
+      if (!existingPair) {
+        db.setNewPairedOldChatId(config.wahaSession, String(chatId));
+        debug('paired:new_first_contact', { session, chatId, inboundSessionName });
+      } else if (String(chatId) !== String(existingPair)) {
+        debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
+        return res.status(200).json({ ok: true, ignored: true });
       }
     }
 
