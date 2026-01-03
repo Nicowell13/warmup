@@ -28,6 +28,8 @@ export function startScheduler(options: SchedulerOptions = {}) {
       return;
     }
 
+    console.log(`⚙️  Scheduler: ${due.length} tasks due, executing...`);
+
     try {
       for (const task of due) {
         try {
@@ -93,6 +95,7 @@ export function startScheduler(options: SchedulerOptions = {}) {
             continue;
           }
 
+          console.log(`   📤 ${chosen.cluster?.toUpperCase() || 'OLD'} ${chosen.wahaSession} → ${task.chatId.substring(0, 12)}...`);
           await sendTextQueued({ session: chosen.wahaSession, chatId: task.chatId, text: picked.text });
           
           // Update progress dengan message count

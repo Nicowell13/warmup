@@ -552,7 +552,10 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     targetsByOld[oldSessionName].push(newChatId);
   }
 
-  let waveStartTime = now.plus({ minutes: Math.max(5, cfg.firstReplyDelayMinutes) });
+  // Wave starts 3 minutes after OLD blast completes (safe buffer)
+  // Note: cfg.firstReplyDelayMinutes (30 min) was for auto-reply mode, not wave system
+  let waveStartTime = now.plus({ minutes: 3 });
+  console.log(`⏰ Wave 1 will start at: ${waveStartTime.toLocaleString()}`);
 
   for (let waveIndex = 0; waveIndex < numWaves; waveIndex++) {
     const oldSession = oldSessions[waveIndex];
@@ -662,6 +665,15 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   }
   
   console.log(`📊 Total scheduled tasks: ${tasks.length} (across ${numWaves} waves)`);
+  
+  // Show first 3 task due times for debugging
+  const sortedTasks = [...tasks].sort((a, b) => String(a.dueAt).localeCompare(String(b.dueAt)));
+  console.log(`📅 First 3 tasks due at:`);
+  for (let i = 0; i < Math.min(3, sortedTasks.length); i++) {
+    const task = sortedTasks[i];
+    const dueTime = DateTime.fromISO(String(task.dueAt), { zone: 'utc' }).setZone(tz);
+    console.log(`   ${i + 1}. ${dueTime.toLocaleString(DateTime.DATETIME_SHORT)} - ${task.senderSession} → ${task.chatId.substring(0, 12)}...`);
+  }
 
   db.replaceScheduledTasksForAutomation(automationId, tasks);
 
