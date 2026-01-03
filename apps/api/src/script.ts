@@ -35,10 +35,13 @@ export function pickReplyFromScript(
   const seasons = parseScript(scriptText);
   if (seasons.length === 0) return null;
 
-  let s = seasonIndex;
+  let s = seasonIndex % seasons.length; // Issue #6 fix: Wrap season index for auto-loop
   let i = lineIndex;
+  let attempts = 0;
+  const maxAttempts = seasons.length * 2; // Coba max 2 full cycles
 
-  while (s < seasons.length) {
+  while (attempts < maxAttempts) {
+    attempts += 1;
     const lines = seasons[s] || [];
 
     while (i < lines.length && !matchesParity(i, parity)) {
@@ -47,11 +50,26 @@ export function pickReplyFromScript(
 
     if (i < lines.length) {
       const step = parity === 'all' ? 1 : 2;
-      return { text: lines[i], nextSeasonIndex: s, nextLineIndex: i + step };
+      const nextI = i + step;
+      // Issue #6 fix: Auto-loop - kalau season habis, wrap ke season berikutnya
+      if (nextI >= lines.length) {
+        return { text: lines[i], nextSeasonIndex: (s + 1) % seasons.length, nextLineIndex: 0 };
+      }
+      return { text: lines[i], nextSeasonIndex: s, nextLineIndex: nextI };
     }
 
-    s += 1;
+    // Issue #6 fix: Kalau season ini habis, lanjut ke season berikutnya (loop infinite)
+    s = (s + 1) % seasons.length;
     i = 0;
+  }
+
+  // Issue #6 fix: Kalau maxAttempts exceeded (very rare), reset ke season 0 line 0
+  const firstLines = seasons[0] || [];
+  for (let idx = 0; idx < firstLines.length; idx++) {
+    if (matchesParity(idx, parity)) {
+      const step = parity === 'all' ? 1 : 2;
+      return { text: firstLines[idx], nextSeasonIndex: 0, nextLineIndex: idx + step };
+    }
   }
 
   return null;

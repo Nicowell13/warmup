@@ -57,6 +57,7 @@ export type ScheduledTask = {
   oldRotationIndex?: number; // index OLD session dalam rotation (0-4)
   waveIndex?: number;
   payload?: any;
+  retryCount?: number; // Issue #4: Track retry attempts
 };
 
 export type AutomationProgressSummary = {
@@ -375,12 +376,28 @@ export const db = {
     const dbState = readDb();
     const idx = (dbState.scheduledTasks || []).findIndex((t) => t.id === id);
     if (idx < 0) return;
-    dbState.scheduledTasks![idx] = {
-      ...dbState.scheduledTasks![idx],
-      status,
-      lastError,
-      updatedAt: new Date().toISOString(),
-    };
+    const task = dbState.scheduledTasks![idx];
+    const retryCount = (task.retryCount || 0) + (status === 'error' ? 1 : 0);
+    
+    // Issue #4 fix: Retry once if first attempt failed (max retryCount = 1)
+    if (status === 'error' && retryCount === 1) {
+      dbState.scheduledTasks![idx] = {
+        ...task,
+        status: 'pending', // Reset to pending for retry
+        dueAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(), // Retry dalam 5 menit
+        lastError,
+        retryCount,
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      dbState.scheduledTasks![idx] = {
+        ...task,
+        status,
+        lastError,
+        retryCount,
+        updatedAt: new Date().toISOString(),
+      };
+    }
     writeDb(dbState);
   },
 };
