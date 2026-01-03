@@ -18,7 +18,7 @@ services:
     build:
       context: ./apps/api
     ports:
-      - "4001:4000"  # Port host 4001 (berbeda dari app1)
+      - "4011:4000"  # Port host 4011 (berbeda dari app1)
     env_file:
       - ./apps/api/.env.local
     environment:
