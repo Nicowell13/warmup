@@ -4,16 +4,15 @@
 
 services:
   waha:
-    image: devlikeapro/waha:latest
+    image: devlikeapro/waha-plus:latest
     ports:
       - "3003:3000"  # Port 3003 untuk WAHA app3
     environment:
+      # WAHA Plus configuration (sama seperti app1)
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      - WAHA_LOG_LEVEL=info
       - WAHA_API_KEY=${WAHA_API_KEY}
-      - WHATSAPP_HOOK_URL=http://api:4000/waha/webhook
-      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME:-admin}
-      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
-      - WHATSAPP_SWAGGER_USERNAME=${WHATSAPP_SWAGGER_USERNAME:-admin}
-      - WHATSAPP_SWAGGER_PASSWORD=${WHATSAPP_SWAGGER_PASSWORD}
+      - WAHA_WEBHOOK_URL=http://api:4000/waha/webhook
     volumes:
       - ./waha-data-app3:/app/.sessions  # Data WAHA terpisah untuk app3
     restart: unless-stopped
