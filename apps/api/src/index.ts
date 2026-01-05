@@ -538,12 +538,12 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
   // Campaign Configuration
   const TOTAL_DAYS = 3; // 3 hari campaign
-  const MESSAGES_PER_DAY = 24; // 24 pesan per hari per pair (24 OLD + 24 NEW)
+  const MESSAGES_PER_DAY_PER_CLUSTER = 24; // 24 pesan OLD + 24 pesan NEW per hari per pair
   const WINDOW_START_HOUR = 8; // Jam 08:00
   const WINDOW_END_HOUR = 22; // Jam 22:00
   const BASE_DELAY_MINUTES = 1;
   
-  console.log(`📅 Campaign schedule: ${TOTAL_DAYS} days, ${MESSAGES_PER_DAY} msg/day, window ${WINDOW_START_HOUR}:00-${WINDOW_END_HOUR}:00`);
+  console.log(`📅 Campaign schedule: ${TOTAL_DAYS} days, ${MESSAGES_PER_DAY_PER_CLUSTER} OLD + ${MESSAGES_PER_DAY_PER_CLUSTER} NEW msg/day/pair, window ${WINDOW_START_HOUR}:00-${WINDOW_END_HOUR}:00`);
   
   // Group targets by their assigned OLD session
   const targetsByOld: Record<string, string[]> = {};
@@ -614,19 +614,19 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     
     // Total pairs across all OLD sessions
     const totalPairs = orderedTargets.length;
-    // Messages per day: OLD→NEW + NEW→OLD = 2 messages per pair per round
+    // Messages per day: 24 OLD + 24 NEW = 24 rounds × 2 messages
     const tasksPerRound = totalPairs * 2;
-    // Total tasks this day
-    const tasksThisDay = MESSAGES_PER_DAY * totalPairs * 2;
+    // Total tasks this day: 24 rounds × totalPairs × 2 (OLD+NEW)
+    const tasksThisDay = MESSAGES_PER_DAY_PER_CLUSTER * totalPairs * 2;
     // Spread evenly within window
     const delayBetweenTasks = Math.floor(windowMinutes / tasksThisDay * 0.9); // 90% of window
     
-    console.log(`   Window: ${windowMinutes} min, ${tasksThisDay} tasks, delay: ${delayBetweenTasks} min/task`);
+    console.log(`   Window: ${windowMinutes} min, ${tasksThisDay} tasks (${MESSAGES_PER_DAY_PER_CLUSTER} rounds), delay: ${delayBetweenTasks} min/task`);
     
     let taskTime = day === 0 ? currentDay : windowStartTime;
     
-    // Generate MESSAGES_PER_DAY rounds for this day
-    for (let roundIndex = 0; roundIndex < MESSAGES_PER_DAY; roundIndex++) {
+    // Generate 24 rounds for this day (each round = OLD→NEW + NEW→OLD)
+    for (let roundIndex = 0; roundIndex < MESSAGES_PER_DAY_PER_CLUSTER; roundIndex++) {
       const maxPairs = Math.max(...oldSessions.map(os => (targetsByOld[os.wahaSession] || []).length));
       
       // For each pair slot, rotate through OLD sessions
