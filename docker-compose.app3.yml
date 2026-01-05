@@ -24,8 +24,10 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - WAHA_BASE_URL=http://host.docker.internal:3001  # Shared WAHA
-      # Atau gunakan dedicated: http://host.docker.internal:3003
+      # WAHA shared: gunakan port exposed WAHA (3001 di host)
+      - WAHA_BASE_URL=${WAHA_BASE_URL:-http://host.docker.internal:3001}
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      # Atau dedicated WAHA: http://host.docker.internal:3002
     volumes:
       - ./apps/data:/app/data
     extra_hosts:
