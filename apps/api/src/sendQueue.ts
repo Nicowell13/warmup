@@ -13,9 +13,14 @@ const SEND_COOLDOWN_EVERY = Number(process.env.SEND_COOLDOWN_EVERY || 5);
 const SEND_COOLDOWN_MIN_MS = Number(process.env.SEND_COOLDOWN_MIN_MS || 15_000);
 const SEND_COOLDOWN_MAX_MS = Number(process.env.SEND_COOLDOWN_MAX_MS || 30_000);
 
-let chain: Promise<void> = Promise.resolve();
-let lastSentAt = 0;
-let sentCount = 0;
+// Multiple worker chains for parallel processing
+const MAX_CONCURRENT_WORKERS = Number(process.env.SEND_MAX_CONCURRENT_WORKERS || 2);
+const workerChains: Promise<void>[] = Array(MAX_CONCURRENT_WORKERS).fill(Promise.resolve());
+const workerMetrics: Array<{ lastSentAt: number; sentCount: number }> = Array(MAX_CONCURRENT_WORKERS)
+  .fill(null)
+  .map(() => ({ lastSentAt: 0, sentCount: 0 }));
+
+let nextWorkerIndex = 0;
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -30,39 +35,43 @@ function randomBetweenMs(minMs: number, maxMs: number) {
   const max = clampNonNegative(maxMs);
   const lo = Math.min(min, max);
   const hi = Math.max(min, max);
-  // Inclusive range
   return lo + Math.floor(Math.random() * (hi - lo + 1));
 }
 
 /**
- * Serialize all outgoing WAHA sends in this API process.
- * This prevents parallel sends across webhook, campaign, and scheduler.
+ * Serialize outgoing WAHA sends across multiple worker chains.
+ * Round-robin distribution for parallel processing while maintaining per-worker rate limits.
  */
 export function sendTextQueued(params: SendTextParams) {
-  const operation = chain.then(async () => {
+  // Round-robin worker selection
+  const workerIdx = nextWorkerIndex;
+  nextWorkerIndex = (nextWorkerIndex + 1) % MAX_CONCURRENT_WORKERS;
+
+  const operation = workerChains[workerIdx].then(async () => {
+    const metrics = workerMetrics[workerIdx];
+    
     const baseDelay = randomBetweenMs(SEND_DELAY_MIN_MS, SEND_DELAY_MAX_MS);
     const every = clampNonNegative(SEND_COOLDOWN_EVERY);
-    const needCooldown = every > 0 && sentCount > 0 && sentCount % every === 0;
+    const needCooldown = every > 0 && metrics.sentCount > 0 && metrics.sentCount % every === 0;
     const cooldownDelay = needCooldown ? randomBetweenMs(SEND_COOLDOWN_MIN_MS, SEND_COOLDOWN_MAX_MS) : 0;
 
     const plannedDelay = baseDelay + cooldownDelay;
     if (plannedDelay > 0) {
       const now = Date.now();
-      const waitFor = Math.max(0, lastSentAt + plannedDelay - now);
+      const waitFor = Math.max(0, metrics.lastSentAt + plannedDelay - now);
       if (waitFor > 0) await sleep(waitFor);
     }
+    
     try {
       await wahaSendText(params);
-      sentCount += 1;
+      metrics.sentCount += 1;
+      console.log(`📤 Worker ${workerIdx + 1}/${MAX_CONCURRENT_WORKERS}: ${params.session} → ${params.chatId.substring(0, 12)}...`);
     } finally {
-      // Keep pacing even if WAHA send fails (e.g. session logout),
-      // so we don't hammer WAHA and we don't get stuck on a rejected chain.
-      lastSentAt = Date.now();
+      metrics.lastSentAt = Date.now();
     }
   });
 
-  // Keep the global chain alive even if this operation fails,
-  // while still returning a rejected promise to the caller.
-  chain = operation.catch(() => undefined);
+  // Keep the global chain alive even if this operation fails
+  workerChains[workerIdx] = operation.catch(() => undefined);
   return operation;
 }
