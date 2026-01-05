@@ -1,8 +1,23 @@
-# Docker Compose untuk App 2 (domain2.com)
+# Docker Compose untuk App 2 (domain2.com) - Standalone WAHA
 # Copy project folder ke /opt/warmup-app2 di VPS
 # Run: docker-compose -f docker-compose.app2.yml up -d
 
 services:
+  waha:
+    image: devlikeapro/waha:latest
+    ports:
+      - "3002:3000"  # Port 3002 untuk WAHA app2
+    environment:
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WHATSAPP_HOOK_URL=http://api:4000/waha/webhook
+      - WAHA_DASHBOARD_USERNAME=${WAHA_DASHBOARD_USERNAME:-admin}
+      - WAHA_DASHBOARD_PASSWORD=${WAHA_DASHBOARD_PASSWORD}
+      - WHATSAPP_SWAGGER_USERNAME=${WHATSAPP_SWAGGER_USERNAME:-admin}
+      - WHATSAPP_SWAGGER_PASSWORD=${WHATSAPP_SWAGGER_PASSWORD}
+    volumes:
+      - ./waha-data-app2:/app/.sessions  # Data WAHA terpisah untuk app2
+    restart: unless-stopped
+
   web:
     build:
       context: ./apps/web
@@ -28,12 +43,10 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
-      # WAHA shared: gunakan port exposed WAHA (3001 di host)
-      - WAHA_BASE_URL=${WAHA_BASE_URL:-http://host.docker.internal:3001}
+      - WAHA_BASE_URL=http://waha:3000  # Internal docker network ke WAHA app2
       - WAHA_API_KEY=${WAHA_API_KEY}
-      # Atau dedicated WAHA: http://host.docker.internal:3002
     volumes:
-      - ./apps/data:/app/data  # Data terpisah per app
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - ./apps/data-app2:/app/data  # Data API terpisah untuk app2
+    depends_on:
+      - waha
     restart: unless-stopped
