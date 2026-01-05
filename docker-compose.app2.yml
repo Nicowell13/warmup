@@ -11,7 +11,7 @@ services:
       # WAHA Plus configuration (sama seperti app1)
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
       - WAHA_LOG_LEVEL=info
-      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_API_KEY=5014d2db2fcf48019e4aee140286480a1b1f6f5c8f6e4f3b2e6e4f7c8d9e0f12
       - WAHA_WEBHOOK_URL=http://api:4000/waha/webhook
     volumes:
       - ./waha-data-app2:/app/.sessions  # Data WAHA terpisah untuk app2
@@ -37,13 +37,15 @@ services:
       context: ./apps/api
     ports:
       - "4011:4000"
-    env_file:
-      - ./apps/api/.env.local
     environment:
       - NODE_ENV=production
       - PORT=4000
-      - WAHA_BASE_URL=http://waha:3000  # Internal docker network ke WAHA app2
-      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WAHA_BASE_URL=http://waha:3000
+      - WAHA_API_KEY=5014d2db2fcf48019e4aee140286480a1b1f6f5c8f6e4f3b2e6e4f7c8d9e0f12
+      - JWT_SECRET=63aeedb737cd1470c76cf13c5dfd5a37f06b2c44a8174c98fbd0a78d5df973f23a3a
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=toloL123456p
+      - SEND_MAX_CONCURRENT_WORKERS=2
     volumes:
       - ./apps/data-app2:/app/data  # Data API terpisah untuk app2
     depends_on:
