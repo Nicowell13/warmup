@@ -41,6 +41,8 @@ export function startScheduler(options: SchedulerOptions = {}) {
 
           if (task.kind === 'wa12-wave-reset') {
             const pairs: Record<string, string> = (task as any)?.payload?.pairings || {};
+            const waveIndex = (task as any)?.waveIndex ?? '?';
+            console.log(`🌊 Wave ${waveIndex} pairing reset: ${Object.keys(pairs).length} NEW sessions updated`);
             db.replaceNewPairings(pairs);
             db.markScheduledTask(task.id, 'sent');
             continue;
