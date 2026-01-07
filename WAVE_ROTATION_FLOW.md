@@ -41,19 +41,12 @@
 ║  │ NEW-7 → OLD-3 (628zzz@c.us)                     │        ║
 ║  └─────────────────────────────────────────────────┘        ║
 ║                                                               ║
-║  Day 1 (08:00 - 22:00):                                      ║
-║    Round 1: OLD-1→NEW-2, NEW-2→OLD-1, OLD-1→NEW-3, ...     ║
-║    Round 2: OLD-1→NEW-2, NEW-2→OLD-1, ...                  ║
-║    ... (8 rounds total, 96 tasks)                           ║
-║                                                               ║
-║  Day 2 (08:00 - 22:00):                                      ║
-║    ... (8 rounds, 96 tasks)                                  ║
-║                                                               ║
-║  Day 3 (08:00 - 22:00):                                      ║
-║    ... (8 rounds, 96 tasks)                                  ║
+║  Day 1-3 (08:00 - 22:00):                                    ║
+║    Tasks jalan terus dalam window sesuai delay yang dihitung ║
+║    untuk menghabiskan total 24 round/pair selama 3 hari.     ║
 ║                                                               ║
 ║  ✅ Wave 1 Complete: 288 tasks executed                     ║
-║     Each pair exchanged 24 messages (OLD) + 24 (NEW)        ║
+║     Each pair exchanged 24 (OLD) + 24 (NEW)                 ║
 ╚════════════════════════┬════════════════════════════════════╝
                          │
                          │ Gap: 1 hour

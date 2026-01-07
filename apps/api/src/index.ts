@@ -538,14 +538,36 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
   // Campaign Configuration
   const TOTAL_DAYS = 3; // 3 hari campaign
-  const MESSAGES_PER_WAVE = 24; // 24 pesan per wave (masing-masing OLD+NEW 24 kali)
-  const MESSAGES_PER_DAY_PER_CLUSTER = 8; // 8 pesan per hari (dibagi dari 24 pesan dalam 3 hari)
+  const MESSAGES_PER_WAVE = 24; // total per-pair per wave, per arah (OLD 24 + NEW 24)
   const TOTAL_WAVES = oldSessions.length; // Jumlah wave = jumlah OLD sessions
-  const WINDOW_START_HOUR = 8; // Jam 08:00
-  const WINDOW_END_HOUR = 22; // Jam 22:00
   const BASE_DELAY_MINUTES = 1;
   
-  console.log(`📅 Campaign schedule: ${TOTAL_WAVES} waves × ${MESSAGES_PER_WAVE} msg/wave, ${TOTAL_DAYS} days, ${MESSAGES_PER_DAY_PER_CLUSTER} msg/day, window ${WINDOW_START_HOUR}:00-${WINDOW_END_HOUR}:00`);
+  const windowStartMinutes = sh * 60 + sm;
+  const windowEndMinutes = eh * 60 + em;
+  const windowMinutesPerDay = windowEndMinutes >= windowStartMinutes
+    ? windowEndMinutes - windowStartMinutes
+    : (24 * 60 - windowStartMinutes) + windowEndMinutes;
+
+  function normalizeToWindow(dt: DateTime): DateTime {
+    // Assumption: typical window where end > start (e.g. 08:00-22:00).
+    // We still handle overnight windows in a best-effort way.
+    let t = dt.setZone(tz);
+    let start = t.set({ hour: sh, minute: sm, second: 0, millisecond: 0 });
+    let end = t.set({ hour: eh, minute: em, second: 0, millisecond: 0 });
+    if (end <= start) {
+      // overnight window
+      if (t < start) start = start.minus({ days: 1 });
+      end = start.plus({ minutes: windowMinutesPerDay });
+    }
+
+    if (t < start) return start;
+    if (t >= end) return start.plus({ days: 1 });
+    return t;
+  }
+
+  console.log(
+    `📅 Campaign schedule: ${TOTAL_WAVES} waves × ${MESSAGES_PER_WAVE} msg/arah/pair (OLD+NEW), ${TOTAL_DAYS} days/wave, window ${cfg.windowStart}-${cfg.windowEnd}`
+  );
   
   // Group targets by their assigned OLD session for Wave 1 (initial assignment)
   const targetsByOld: Record<string, string[]> = {};
@@ -605,7 +627,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   // dst sampai 5 waves (sebanyak OLD sessions)
   
   const initialDelaySeconds = 14 + Math.floor(Math.random() * 7);
-  let globalTaskTime = now.plus({ seconds: initialDelaySeconds });
+  let globalTaskTime = normalizeToWindow(now.plus({ seconds: initialDelaySeconds }));
   
   // For each wave
   for (let waveIndex = 0; waveIndex < TOTAL_WAVES; waveIndex++) {
@@ -666,121 +688,96 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       // Add 60 seconds delay after pairing update before messages start
       globalTaskTime = globalTaskTime.plus({ seconds: 60 });
     }
-    
-    // Generate tasks for this wave: 24 messages each (spread over 3 days)
-    let currentDay = waveIndex === 0 ? globalTaskTime : globalTaskTime.set({ hour: WINDOW_START_HOUR, minute: 0, second: 0 });
-    
-    for (let day = 0; day < TOTAL_DAYS; day++) {
-      // For days after first, start at window start time
-      if (day > 0 || waveIndex > 0) {
-        currentDay = currentDay.plus({ days: day > 0 ? 1 : 0 }).set({ hour: WINDOW_START_HOUR, minute: 0, second: 0 });
-      }
-      
-      const absoluteDay = waveIndex * TOTAL_DAYS + day;
-      console.log(`   📆 Wave ${waveIndex + 1} Day ${day + 1} (Absolute Day ${absoluteDay + 1}) starts at: ${currentDay.toLocaleString()}`);
-      
-      // Calculate available window time
-      const windowStartTime = currentDay.set({ hour: WINDOW_START_HOUR, minute: 0 });
-      const windowEndTime = currentDay.set({ hour: WINDOW_END_HOUR, minute: 0 });
-      const windowMinutes = windowEndTime.diff(windowStartTime, 'minutes').minutes;
-      
-      // Total tasks for all pairs this day
-      const allNewTargetsInWave = Object.values(waveAssignment).reduce((sum, a) => sum + a.newTargets.length, 0);
-      const tasksThisDay = MESSAGES_PER_DAY_PER_CLUSTER * allNewTargetsInWave * 2; // OLD+NEW
-      const delayBetweenTasks = Math.max(1, Math.floor(windowMinutes / tasksThisDay * 0.85)); // 85% of window
-      
-      console.log(`      Window: ${windowMinutes} min, ${tasksThisDay} tasks, delay: ${delayBetweenTasks} min/task`);
-      
-      let taskTime = day === 0 && waveIndex === 0 ? currentDay : windowStartTime;
-      
-      // Generate 8 rounds for this day
-      for (let roundIndex = 0; roundIndex < MESSAGES_PER_DAY_PER_CLUSTER; roundIndex++) {
-        // For each OLD in this wave
-        for (const oldSession of oldSessions) {
-          const oldSessionName = oldSession.wahaSession;
-          const assignment = waveAssignment[oldSessionName];
-          if (!assignment || assignment.newTargets.length === 0) continue;
-          
-          const oldChatId = oldSessionChatIds[oldSessionName];
-          if (!oldChatId) continue;
-          
-          // For each NEW target paired with this OLD in this wave
-          for (const newChatId of assignment.newTargets) {
-            const newSessionName =
-              newChatIdToNewSession[newChatId] ||
-              newSessionFallbackMap[newChatId] ||
-              newSessions[0]?.wahaSession;
-            
-            if (!newSessionName) {
-              console.error(`❌ Skipping: newChatId=${newChatId} has no session`);
-              continue;
-            }
-            
-            // Check if task time exceeds window
-            if (taskTime.hour >= WINDOW_END_HOUR) {
-              console.warn(`⚠️  Task time ${taskTime.toLocaleString()} exceeds window`);
-              break;
-            }
-            
-            // OLD → NEW
-            tasks.push({
-              id: randomUUID(),
-              automationId,
-              dueAt: taskTime.toUTC().toISO()!,
-              chatId: newChatId,
-              senderSession: oldSessionName,
-              kind: 'script-next',
-              status: 'pending',
-              waveIndex,
-              dayIndex: absoluteDay,
-              roundIndex,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
-            
-            taskTime = taskTime.plus({ seconds: 30, minutes: Math.max(delayBetweenTasks, BASE_DELAY_MINUTES) });
-            
-            // NEW → OLD
-            tasks.push({
-              id: randomUUID(),
-              automationId,
-              dueAt: taskTime.toUTC().toISO()!,
-              chatId: oldChatId,
-              senderSession: newSessionName,
-              kind: 'script-next',
-              status: 'pending',
-              waveIndex,
-              dayIndex: absoluteDay,
-              roundIndex,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
-            
-            taskTime = taskTime.plus({ minutes: Math.max(delayBetweenTasks, BASE_DELAY_MINUTES) });
+
+    // Generate tasks for this wave:
+    // - Exactly MESSAGES_PER_WAVE rounds per pair (OLD→NEW then NEW→OLD)
+    // - Scheduled continuously across TOTAL_DAYS within cfg.windowStart-windowEnd
+    const allNewTargetsInWave = Object.values(waveAssignment).reduce((sum, a) => sum + a.newTargets.length, 0);
+    const totalTasksInWave = MESSAGES_PER_WAVE * allNewTargetsInWave * 2; // OLD+NEW
+    const totalWindowSecondsInWave = Math.max(1, TOTAL_DAYS * windowMinutesPerDay * 60);
+    const delayBetweenTasksSeconds = Math.max(
+      BASE_DELAY_MINUTES * 60,
+      Math.floor((totalWindowSecondsInWave / Math.max(1, totalTasksInWave)) * 0.85)
+    );
+
+    console.log(
+      `   ⏱️  Wave pacing: ${allNewTargetsInWave} pairs, ${totalTasksInWave} tasks, delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task (window ${TOTAL_DAYS}d × ${windowMinutesPerDay}m)`
+    );
+
+    let taskTime = normalizeToWindow(globalTaskTime);
+    const waveDay0 = taskTime.startOf('day');
+
+    for (let roundIndex = 0; roundIndex < MESSAGES_PER_WAVE; roundIndex++) {
+      for (const oldSession of oldSessions) {
+        const oldSessionName = oldSession.wahaSession;
+        const assignment = waveAssignment[oldSessionName];
+        if (!assignment || assignment.newTargets.length === 0) continue;
+
+        const oldChatId = oldSessionChatIds[oldSessionName];
+        if (!oldChatId) continue;
+
+        for (const newChatId of assignment.newTargets) {
+          const newSessionName =
+            newChatIdToNewSession[newChatId] ||
+            newSessionFallbackMap[newChatId] ||
+            newSessions[0]?.wahaSession;
+
+          if (!newSessionName) {
+            console.error(`❌ Skipping: newChatId=${newChatId} has no session`);
+            continue;
           }
+
+          taskTime = normalizeToWindow(taskTime);
+          const dayOffset = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
+          const absoluteDay = waveIndex * TOTAL_DAYS + dayOffset;
+
+          // OLD → NEW
+          tasks.push({
+            id: randomUUID(),
+            automationId,
+            dueAt: taskTime.toUTC().toISO()!,
+            chatId: newChatId,
+            senderSession: oldSessionName,
+            kind: 'script-next',
+            status: 'pending',
+            waveIndex,
+            dayIndex: absoluteDay,
+            roundIndex,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+
+          taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
+
+          taskTime = normalizeToWindow(taskTime);
+          const dayOffset2 = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
+          const absoluteDay2 = waveIndex * TOTAL_DAYS + dayOffset2;
+
+          // NEW → OLD
+          tasks.push({
+            id: randomUUID(),
+            automationId,
+            dueAt: taskTime.toUTC().toISO()!,
+            chatId: oldChatId,
+            senderSession: newSessionName,
+            kind: 'script-next',
+            status: 'pending',
+            waveIndex,
+            dayIndex: absoluteDay2,
+            roundIndex,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+
+          taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
         }
       }
-      
-      const dayTasks = tasks.filter((t: any) => t.dayIndex === absoluteDay && t.kind !== 'wa12-wave-reset');
-      console.log(`      ✅ Day ${day + 1}: ${dayTasks.length} message tasks`);
     }
+
+    // Move globalTaskTime close to the end of this wave
+    globalTaskTime = normalizeToWindow(taskTime.plus({ hours: 1 }));
     
-    // Update global task time to end of this wave
     const waveTasks = tasks.filter((t: any) => t.waveIndex === waveIndex && t.kind !== 'wa12-wave-reset');
-    if (waveTasks.length > 0) {
-      const waveTaskTimes = waveTasks
-        .map((t: any) => DateTime.fromISO(t.dueAt, { zone: 'utc' }).setZone(tz))
-        .filter((dt) => dt.isValid);
-      
-      if (waveTaskTimes.length > 0) {
-        const lastWaveTaskTime = waveTaskTimes.reduce((latest, current) => current > latest ? current : latest);
-        const newTime = DateTime.fromMillis(lastWaveTaskTime.toMillis(), { zone: tz }).plus({ hours: 1 });
-        if (newTime.isValid) {
-          globalTaskTime = newTime;
-        }
-      }
-    }
-    
     console.log(`   ✅ Wave ${waveIndex + 1} complete: ${waveTasks.length} tasks, next wave starts at ${globalTaskTime.toLocaleString()}`);
   }
   

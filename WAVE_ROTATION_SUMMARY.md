@@ -16,7 +16,7 @@ Implementasi wave rotation telah selesai! Berikut adalah ringkasan lengkap dari 
 **Key Changes:**
 ```typescript
 // Configuration baru
-const MESSAGES_PER_WAVE = 24; // 24 pesan per wave
+const MESSAGES_PER_WAVE = 24; // total per-pair per wave, per arah (OLD 24 + NEW 24)
 const TOTAL_WAVES = oldSessions.length; // Jumlah waves = jumlah OLD
 
 // Rotation formula
@@ -139,7 +139,7 @@ curl -X POST http://localhost:4000/automations/wa12 \
 ### 3. Monitor Logs
 ```
 🚀 Starting campaign xxx: 4 targets, 2 waves
-📅 Campaign schedule: 2 waves × 24 msg/wave, 3 days, 8 msg/day
+📅 Campaign schedule: 2 waves × 24 msg/arah/pair (OLD+NEW), 3 days/wave (jalan terus dalam window)
 
 🌊 === WAVE 1/2 ===
    old-1 → 2 targets (from old-1)
