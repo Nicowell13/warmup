@@ -538,7 +538,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
   // Campaign Configuration
   const TOTAL_DAYS = 3; // 3 hari campaign
-  const MESSAGES_PER_WAVE = 24; // total per-pair per wave, per arah (OLD 24 + NEW 24)
+  const MESSAGES_PER_WAVE = 72; // total per-pair per wave, per arah (OLD 72 + NEW 72)
   const TOTAL_WAVES = oldSessions.length; // Jumlah wave = jumlah OLD sessions
   const BASE_DELAY_MINUTES = 1;
   
