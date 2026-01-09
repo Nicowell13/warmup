@@ -537,10 +537,11 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const tasks = [] as any[];
 
   // Campaign Configuration
-  const TOTAL_DAYS = 3; // 3 hari campaign
+  const TOTAL_WINDOWS = 3; // total 3x window untuk SELURUH campaign (semua wave)
   const MESSAGES_PER_WAVE = 72; // total per-pair per wave, per arah (OLD 72 + NEW 72)
   const TOTAL_WAVES = oldSessions.length; // Jumlah wave = jumlah OLD sessions
   const BASE_DELAY_MINUTES = 1;
+  const POST_RESET_BUFFER_SECONDS = 30; // pastikan pairing reset dieksekusi sebelum pesan wave berikutnya
   
   const windowStartMinutes = sh * 60 + sm;
   const windowEndMinutes = eh * 60 + em;
@@ -565,8 +566,21 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     return t;
   }
 
+  const totalWindowSecondsCampaign = Math.max(1, TOTAL_WINDOWS * windowMinutesPerDay * 60);
+  const totalPairsPerWave = orderedTargets.length; // jumlah NEW targets
+  const totalMessageTasksPerWave = MESSAGES_PER_WAVE * totalPairsPerWave * 2; // OLD+NEW
+  const totalResetTasks = Math.max(0, TOTAL_WAVES - 1);
+  const totalTasksCampaign = totalResetTasks + (TOTAL_WAVES * totalMessageTasksPerWave);
+  // No fixed minimum pacing (previously clamped to BASE_DELAY_MINUTES=1).
+  // Keep a tiny guard so we don't generate identical timestamps.
+  const delayBetweenTasksSeconds = Math.max(
+    1,
+    Math.floor((totalWindowSecondsCampaign / Math.max(1, totalTasksCampaign)) * 0.85)
+  );
+
   console.log(
-    `📅 Campaign schedule: ${TOTAL_WAVES} waves × ${MESSAGES_PER_WAVE} msg/arah/pair (OLD+NEW), ${TOTAL_DAYS} days/wave, window ${cfg.windowStart}-${cfg.windowEnd}`
+    `📅 Campaign schedule: ${TOTAL_WAVES} waves, ${TOTAL_WINDOWS}x window total, ` +
+    `${MESSAGES_PER_WAVE} msg/arah/pair/wave (OLD+NEW), delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task, window ${cfg.windowStart}-${cfg.windowEnd}`
   );
   
   // Group targets by their assigned OLD session for Wave 1 (initial assignment)
@@ -684,24 +698,18 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-      
-      // Add 60 seconds delay after pairing update before messages start
-      globalTaskTime = globalTaskTime.plus({ seconds: 60 });
+
+      // Small buffer after pairing update before messages start
+      globalTaskTime = globalTaskTime.plus({ seconds: POST_RESET_BUFFER_SECONDS });
     }
 
     // Generate tasks for this wave:
     // - Exactly MESSAGES_PER_WAVE rounds per pair (OLD→NEW then NEW→OLD)
-    // - Scheduled continuously across TOTAL_DAYS within cfg.windowStart-windowEnd
+    // - Uses campaign-level pacing so ALL waves fit within TOTAL_WINDOWS windows
     const allNewTargetsInWave = Object.values(waveAssignment).reduce((sum, a) => sum + a.newTargets.length, 0);
     const totalTasksInWave = MESSAGES_PER_WAVE * allNewTargetsInWave * 2; // OLD+NEW
-    const totalWindowSecondsInWave = Math.max(1, TOTAL_DAYS * windowMinutesPerDay * 60);
-    const delayBetweenTasksSeconds = Math.max(
-      BASE_DELAY_MINUTES * 60,
-      Math.floor((totalWindowSecondsInWave / Math.max(1, totalTasksInWave)) * 0.85)
-    );
-
     console.log(
-      `   ⏱️  Wave pacing: ${allNewTargetsInWave} pairs, ${totalTasksInWave} tasks, delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task (window ${TOTAL_DAYS}d × ${windowMinutesPerDay}m)`
+      `   ⏱️  Wave pacing: ${allNewTargetsInWave} pairs, ${totalTasksInWave} tasks, delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task`
     );
 
     let taskTime = normalizeToWindow(globalTaskTime);
@@ -729,7 +737,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
           taskTime = normalizeToWindow(taskTime);
           const dayOffset = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
-          const absoluteDay = waveIndex * TOTAL_DAYS + dayOffset;
+          const absoluteDay = dayOffset;
 
           // OLD → NEW
           tasks.push({
@@ -751,7 +759,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
           taskTime = normalizeToWindow(taskTime);
           const dayOffset2 = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
-          const absoluteDay2 = waveIndex * TOTAL_DAYS + dayOffset2;
+          const absoluteDay2 = dayOffset2;
 
           // NEW → OLD
           tasks.push({
@@ -774,8 +782,8 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       }
     }
 
-    // Move globalTaskTime close to the end of this wave
-    globalTaskTime = normalizeToWindow(taskTime.plus({ hours: 1 }));
+    // Continue immediately to next wave (no extra gap)
+    globalTaskTime = normalizeToWindow(taskTime);
     
     const waveTasks = tasks.filter((t: any) => t.waveIndex === waveIndex && t.kind !== 'wa12-wave-reset');
     console.log(`   ✅ Wave ${waveIndex + 1} complete: ${waveTasks.length} tasks, next wave starts at ${globalTaskTime.toLocaleString()}`);
