@@ -167,3 +167,39 @@ export async function wahaDeleteSession(session: string) {
     },
   });
 }
+
+// ===== Human-like Behavior Helpers =====
+
+// Docs: POST /api/sendSeen - Mark messages as read (blue ticks)
+export async function wahaSendSeen(session: string, chatId: string) {
+  return wahaRequestJson('/api/sendSeen', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ session, chatId }),
+  });
+}
+
+// Docs: POST /api/startTyping - Show typing indicator
+export async function wahaStartTyping(session: string, chatId: string) {
+  return wahaRequestJson('/api/startTyping', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ session, chatId }),
+  });
+}
+
+// Docs: POST /api/stopTyping - Hide typing indicator
+export async function wahaStopTyping(session: string, chatId: string) {
+  return wahaRequestJson('/api/stopTyping', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ session, chatId }),
+  });
+}
+

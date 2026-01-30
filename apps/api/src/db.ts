@@ -81,9 +81,17 @@ type DbShape = {
   automations?: AutomationRecord[];
   scheduledTasks?: ScheduledTask[];
   newPairings?: Record<string, { oldChatId: string; updatedAt: string }>;
+  dailyStats?: Record<string, DailySessionStats>; // key: "sessionName:YYYY-MM-DD"
   flags?: {
     suppressNewAutoReplyUntil?: string | null;
   };
+};
+
+export type DailySessionStats = {
+  sessionName: string;
+  date: string; // YYYY-MM-DD
+  messagesSent: number;
+  lastMessageAt: string;
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -101,7 +109,7 @@ const DB_FILE = getDbFilePath();
 
 function readDb(): DbShape {
   if (!fs.existsSync(DB_FILE)) {
-    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [], newPairings: {}, flags: {} };
+    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [], newPairings: {}, dailyStats: {}, flags: {} };
   }
   const raw = fs.readFileSync(DB_FILE, 'utf8');
   const parsed = JSON.parse(raw) as DbShape;
@@ -111,6 +119,7 @@ function readDb(): DbShape {
     automations: parsed.automations || [],
     scheduledTasks: parsed.scheduledTasks || [],
     newPairings: parsed.newPairings || {},
+    dailyStats: parsed.dailyStats || {},
     flags: parsed.flags || {},
   };
 }
@@ -378,7 +387,7 @@ export const db = {
     if (idx < 0) return;
     const task = dbState.scheduledTasks![idx];
     const retryCount = (task.retryCount || 0) + (status === 'error' ? 1 : 0);
-    
+
     // Issue #4 fix: Retry once if first attempt failed (max retryCount = 1)
     if (status === 'error' && retryCount === 1) {
       dbState.scheduledTasks![idx] = {
@@ -399,5 +408,71 @@ export const db = {
       };
     }
     writeDb(dbState);
+  },
+
+  // ===== Daily Session Stats (for limiting messages per day) =====
+
+  getSessionDailyStats(sessionName: string, date?: string): DailySessionStats | null {
+    const dbState = readDb();
+    const targetDate = date || new Date().toISOString().split('T')[0];
+    const key = `${sessionName}:${targetDate}`;
+    return dbState.dailyStats?.[key] || null;
+  },
+
+  incrementSessionDailyCount(sessionName: string): number {
+    const dbState = readDb();
+    const now = new Date();
+    const targetDate = now.toISOString().split('T')[0];
+    const key = `${sessionName}:${targetDate}`;
+
+    if (!dbState.dailyStats) dbState.dailyStats = {};
+
+    const existing = dbState.dailyStats[key];
+    if (existing) {
+      existing.messagesSent += 1;
+      existing.lastMessageAt = now.toISOString();
+    } else {
+      dbState.dailyStats[key] = {
+        sessionName,
+        date: targetDate,
+        messagesSent: 1,
+        lastMessageAt: now.toISOString(),
+      };
+    }
+
+    writeDb(dbState);
+    return dbState.dailyStats[key].messagesSent;
+  },
+
+  isSessionDailyLimitReached(sessionName: string, limit = 30): boolean {
+    const stats = db.getSessionDailyStats(sessionName);
+    return stats ? stats.messagesSent >= limit : false;
+  },
+
+  getSessionTodayMessageCount(sessionName: string): number {
+    const stats = db.getSessionDailyStats(sessionName);
+    return stats?.messagesSent || 0;
+  },
+
+  // Clean up old stats (keep only last 7 days)
+  cleanupOldDailyStats(): number {
+    const dbState = readDb();
+    if (!dbState.dailyStats) return 0;
+
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - 7);
+    const cutoffDateStr = cutoffDate.toISOString().split('T')[0];
+
+    let cleaned = 0;
+    for (const key of Object.keys(dbState.dailyStats)) {
+      const dateStr = key.split(':')[1];
+      if (dateStr && dateStr < cutoffDateStr) {
+        delete dbState.dailyStats[key];
+        cleaned += 1;
+      }
+    }
+
+    if (cleaned > 0) writeDb(dbState);
+    return cleaned;
   },
 };

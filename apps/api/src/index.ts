@@ -404,12 +404,12 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       oldSessionChatIds[os.wahaSession] = chatId;
     }
   }
-  
+
   // Validate: All OLD sessions must have chatId for wave system
   const missingOldChatIds = oldSessions.filter(os => !oldSessionChatIds[os.wahaSession]);
   if (missingOldChatIds.length > 0) {
     console.error('❌ OLD sessions without chatId:', missingOldChatIds.map(s => s.wahaSession));
-    return res.status(400).json({ 
+    return res.status(400).json({
       error: 'OLD sessions not properly connected. Cannot build wave tasks.',
       missingSessions: missingOldChatIds.map(s => s.wahaSession)
     });
@@ -495,7 +495,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   (async () => {
     try {
       console.log(`🚀 Starting campaign ${automationId}: ${orderedTargets.length} targets, ${oldSessions.length} waves`);
-      
+
       // Suppress NEW auto-replies while we blast from OLD and build scheduled tasks.
       // This prevents NEW webhook from firing immediately (spiky pattern / inconsistent pairing).
       db.setSuppressNewAutoReplyUntil(DateTime.now().plus({ days: 7 }).toUTC().toISO()!);
@@ -534,286 +534,287 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       const successCount = campaignResults.filter(r => r.ok).length;
       console.log(`✅ OLD blast complete: ${successCount}/${orderedTargets.length} sent successfully`);
 
-  const tasks = [] as any[];
+      const tasks = [] as any[];
 
-  // Campaign Configuration
-  const TOTAL_WINDOWS = 3; // total 3x window untuk SELURUH campaign (semua wave)
-  const MESSAGES_PER_WAVE = 72; // total per-pair per wave, per arah (OLD 72 + NEW 72)
-  const TOTAL_WAVES = oldSessions.length; // Jumlah wave = jumlah OLD sessions
-  const BASE_DELAY_MINUTES = 1;
-  const POST_RESET_BUFFER_SECONDS = 30; // pastikan pairing reset dieksekusi sebelum pesan wave berikutnya
-  
-  const windowStartMinutes = sh * 60 + sm;
-  const windowEndMinutes = eh * 60 + em;
-  const windowMinutesPerDay = windowEndMinutes >= windowStartMinutes
-    ? windowEndMinutes - windowStartMinutes
-    : (24 * 60 - windowStartMinutes) + windowEndMinutes;
+      // Campaign Configuration - now configurable via environment variables
+      // Reduced defaults for safer warm-up
+      const TOTAL_WINDOWS = Number(process.env.TOTAL_WINDOWS || 5); // spread across 5 windows (was: 3)
+      const MESSAGES_PER_WAVE = Number(process.env.MESSAGES_PER_WAVE || 15); // reduced from 72 to 15
+      const TOTAL_WAVES = oldSessions.length; // Jumlah wave = jumlah OLD sessions
+      const BASE_DELAY_MINUTES = 1;
+      const POST_RESET_BUFFER_SECONDS = 30; // pastikan pairing reset dieksekusi sebelum pesan wave berikutnya
 
-  function normalizeToWindow(dt: DateTime): DateTime {
-    // Assumption: typical window where end > start (e.g. 08:00-22:00).
-    // We still handle overnight windows in a best-effort way.
-    let t = dt.setZone(tz);
-    let start = t.set({ hour: sh, minute: sm, second: 0, millisecond: 0 });
-    let end = t.set({ hour: eh, minute: em, second: 0, millisecond: 0 });
-    if (end <= start) {
-      // overnight window
-      if (t < start) start = start.minus({ days: 1 });
-      end = start.plus({ minutes: windowMinutesPerDay });
-    }
+      const windowStartMinutes = sh * 60 + sm;
+      const windowEndMinutes = eh * 60 + em;
+      const windowMinutesPerDay = windowEndMinutes >= windowStartMinutes
+        ? windowEndMinutes - windowStartMinutes
+        : (24 * 60 - windowStartMinutes) + windowEndMinutes;
 
-    if (t < start) return start;
-    if (t >= end) return start.plus({ days: 1 });
-    return t;
-  }
+      function normalizeToWindow(dt: DateTime): DateTime {
+        // Assumption: typical window where end > start (e.g. 08:00-22:00).
+        // We still handle overnight windows in a best-effort way.
+        let t = dt.setZone(tz);
+        let start = t.set({ hour: sh, minute: sm, second: 0, millisecond: 0 });
+        let end = t.set({ hour: eh, minute: em, second: 0, millisecond: 0 });
+        if (end <= start) {
+          // overnight window
+          if (t < start) start = start.minus({ days: 1 });
+          end = start.plus({ minutes: windowMinutesPerDay });
+        }
 
-  const totalWindowSecondsCampaign = Math.max(1, TOTAL_WINDOWS * windowMinutesPerDay * 60);
-  const totalPairsPerWave = orderedTargets.length; // jumlah NEW targets
-  const totalMessageTasksPerWave = MESSAGES_PER_WAVE * totalPairsPerWave * 2; // OLD+NEW
-  const totalResetTasks = Math.max(0, TOTAL_WAVES - 1);
-  const totalTasksCampaign = totalResetTasks + (TOTAL_WAVES * totalMessageTasksPerWave);
-  // No fixed minimum pacing (previously clamped to BASE_DELAY_MINUTES=1).
-  // Keep a tiny guard so we don't generate identical timestamps.
-  const delayBetweenTasksSeconds = Math.max(
-    1,
-    Math.floor((totalWindowSecondsCampaign / Math.max(1, totalTasksCampaign)) * 0.85)
-  );
+        if (t < start) return start;
+        if (t >= end) return start.plus({ days: 1 });
+        return t;
+      }
 
-  console.log(
-    `📅 Campaign schedule: ${TOTAL_WAVES} waves, ${TOTAL_WINDOWS}x window total, ` +
-    `${MESSAGES_PER_WAVE} msg/arah/pair/wave (OLD+NEW), delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task, window ${cfg.windowStart}-${cfg.windowEnd}`
-  );
-  
-  // Group targets by their assigned OLD session for Wave 1 (initial assignment)
-  const targetsByOld: Record<string, string[]> = {};
-  for (const [newChatId, oldSessionName] of Object.entries(assignedOldByNewChatId)) {
-    if (!targetsByOld[oldSessionName]) targetsByOld[oldSessionName] = [];
-    targetsByOld[oldSessionName].push(newChatId);
-  }
-  
-  // Validate: Ensure all targets have OLD assignment
-  const unassignedTargets = orderedTargets.filter(t => !assignedOldByNewChatId[t]);
-  if (unassignedTargets.length > 0) {
-    console.error(`❌ ${unassignedTargets.length} targets not assigned to OLD:`, unassignedTargets);
-    return res.status(500).json({ error: 'Target assignment failed', unassignedTargets });
-  }
-  
-  // Build full pairing map (all NEW → their assigned OLD chatId)
-  const fullPairingMap: Record<string, string> = {};
-  const unmappedNewSessions: string[] = [];
-  
-  for (const [newChatId, oldSessionName] of Object.entries(assignedOldByNewChatId)) {
-    const oldChatId = oldSessionChatIds[oldSessionName];
-    if (!oldChatId) {
-      console.error(`❌ OLD session ${oldSessionName} missing chatId, skipping targets`);
-      continue;
-    }
-    
-    const newSessionName =
-      newChatIdToNewSession[newChatId] ||
-      newSessionFallbackMap[newChatId] ||
-      newSessions[0]?.wahaSession;
-      
-    if (!newSessionName) {
-      console.error(`❌ NEW target ${newChatId} has no session mapping`);
-      unmappedNewSessions.push(newChatId);
-      continue;
-    }
-    
-    fullPairingMap[newSessionName] = oldChatId;
-    console.log(`  ✅ Pair: ${newSessionName} → ${oldSessionName} (${oldChatId})`);
-  }
-  
-  if (unmappedNewSessions.length > 0) {
-    console.error(`❌ ${unmappedNewSessions.length} NEW targets have no session mapping`);
-    return res.status(500).json({ error: 'NEW session mapping failed', unmappedNewSessions });
-  }
-  
-  // Set initial pairing
-  db.replaceNewPairings(fullPairingMap);
-  console.log(`🔗 Pairing set: ${Object.keys(fullPairingMap).length} NEW sessions paired`);
+      const totalWindowSecondsCampaign = Math.max(1, TOTAL_WINDOWS * windowMinutesPerDay * 60);
+      const totalPairsPerWave = orderedTargets.length; // jumlah NEW targets
+      const totalMessageTasksPerWave = MESSAGES_PER_WAVE * totalPairsPerWave * 2; // OLD+NEW
+      const totalResetTasks = Math.max(0, TOTAL_WAVES - 1);
+      const totalTasksCampaign = totalResetTasks + (TOTAL_WAVES * totalMessageTasksPerWave);
+      // No fixed minimum pacing (previously clamped to BASE_DELAY_MINUTES=1).
+      // Keep a tiny guard so we don't generate identical timestamps.
+      const delayBetweenTasksSeconds = Math.max(
+        1,
+        Math.floor((totalWindowSecondsCampaign / Math.max(1, totalTasksCampaign)) * 0.85)
+      );
 
-  // Generate tasks: Multi-wave rotation schedule
-  // Wave structure: OLD sessions rotate through NEW pairs
-  // Example with 5 OLD and 10 NEW (2 per OLD):
-  // Wave 1: OLD-1→NEW-2,3 | OLD-2→NEW-4,5 | OLD-3→NEW-6,7 | OLD-4→NEW-8,9 | OLD-5→NEW-10,11
-  // Wave 2: OLD-1→NEW-4,5 | OLD-2→NEW-6,7 | OLD-3→NEW-8,9 | OLD-4→NEW-10,11 | OLD-5→NEW-2,3 (rotasi)
-  // Wave 3: OLD-1→NEW-6,7 | OLD-2→NEW-8,9 | dst...
-  // dst sampai 5 waves (sebanyak OLD sessions)
-  
-  const initialDelaySeconds = 14 + Math.floor(Math.random() * 7);
-  let globalTaskTime = normalizeToWindow(now.plus({ seconds: initialDelaySeconds }));
-  
-  // For each wave
-  for (let waveIndex = 0; waveIndex < TOTAL_WAVES; waveIndex++) {
-    console.log(`\n🌊 === WAVE ${waveIndex + 1}/${TOTAL_WAVES} ===`);
-    
-    // Calculate rotated assignment for this wave
-    // Rotation formula: OLD at index i gets targets from OLD at index (i + waveIndex) % TOTAL_OLD
-    const waveAssignment: Record<string, { oldSessionName: string; newTargets: string[] }> = {};
-    
-    for (let oldIdx = 0; oldIdx < oldSessions.length; oldIdx++) {
-      const currentOld = oldSessions[oldIdx];
-      // Get targets from the OLD session at rotated position
-      const sourceOldIdx = (oldIdx + waveIndex) % oldSessions.length;
-      const sourceOld = oldSessions[sourceOldIdx];
-      const targets = targetsByOld[sourceOld.wahaSession] || [];
-      
-      waveAssignment[currentOld.wahaSession] = {
-        oldSessionName: currentOld.wahaSession,
-        newTargets: targets,
-      };
-      
-      console.log(`   ${currentOld.wahaSession} → ${targets.length} targets (from ${sourceOld.wahaSession})`);
-    }
-    
-    // Build pairing map for this wave
-    const wavePairingMap: Record<string, string> = {};
-    for (const [oldSessionName, assignment] of Object.entries(waveAssignment)) {
-      const oldChatId = oldSessionChatIds[oldSessionName];
-      if (!oldChatId) continue;
-      
-      for (const newChatId of assignment.newTargets) {
+      console.log(
+        `📅 Campaign schedule: ${TOTAL_WAVES} waves, ${TOTAL_WINDOWS}x window total, ` +
+        `${MESSAGES_PER_WAVE} msg/arah/pair/wave (OLD+NEW), delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task, window ${cfg.windowStart}-${cfg.windowEnd}`
+      );
+
+      // Group targets by their assigned OLD session for Wave 1 (initial assignment)
+      const targetsByOld: Record<string, string[]> = {};
+      for (const [newChatId, oldSessionName] of Object.entries(assignedOldByNewChatId)) {
+        if (!targetsByOld[oldSessionName]) targetsByOld[oldSessionName] = [];
+        targetsByOld[oldSessionName].push(newChatId);
+      }
+
+      // Validate: Ensure all targets have OLD assignment
+      const unassignedTargets = orderedTargets.filter(t => !assignedOldByNewChatId[t]);
+      if (unassignedTargets.length > 0) {
+        console.error(`❌ ${unassignedTargets.length} targets not assigned to OLD:`, unassignedTargets);
+        return res.status(500).json({ error: 'Target assignment failed', unassignedTargets });
+      }
+
+      // Build full pairing map (all NEW → their assigned OLD chatId)
+      const fullPairingMap: Record<string, string> = {};
+      const unmappedNewSessions: string[] = [];
+
+      for (const [newChatId, oldSessionName] of Object.entries(assignedOldByNewChatId)) {
+        const oldChatId = oldSessionChatIds[oldSessionName];
+        if (!oldChatId) {
+          console.error(`❌ OLD session ${oldSessionName} missing chatId, skipping targets`);
+          continue;
+        }
+
         const newSessionName =
           newChatIdToNewSession[newChatId] ||
           newSessionFallbackMap[newChatId] ||
           newSessions[0]?.wahaSession;
-        
-        if (newSessionName) {
-          wavePairingMap[newSessionName] = oldChatId;
+
+        if (!newSessionName) {
+          console.error(`❌ NEW target ${newChatId} has no session mapping`);
+          unmappedNewSessions.push(newChatId);
+          continue;
         }
+
+        fullPairingMap[newSessionName] = oldChatId;
+        console.log(`  ✅ Pair: ${newSessionName} → ${oldSessionName} (${oldChatId})`);
       }
-    }
-    
-    // Schedule pairing update task at start of wave (except wave 1, already set above)
-    if (waveIndex > 0) {
-      tasks.push({
-        id: randomUUID(),
-        automationId,
-        dueAt: globalTaskTime.toUTC().toISO()!,
-        chatId: 'system',
-        kind: 'wa12-wave-reset',
-        status: 'pending',
-        waveIndex,
-        payload: { pairings: wavePairingMap },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
 
-      // Small buffer after pairing update before messages start
-      globalTaskTime = globalTaskTime.plus({ seconds: POST_RESET_BUFFER_SECONDS });
-    }
+      if (unmappedNewSessions.length > 0) {
+        console.error(`❌ ${unmappedNewSessions.length} NEW targets have no session mapping`);
+        return res.status(500).json({ error: 'NEW session mapping failed', unmappedNewSessions });
+      }
 
-    // Generate tasks for this wave:
-    // - Exactly MESSAGES_PER_WAVE rounds per pair (OLD→NEW then NEW→OLD)
-    // - Uses campaign-level pacing so ALL waves fit within TOTAL_WINDOWS windows
-    const allNewTargetsInWave = Object.values(waveAssignment).reduce((sum, a) => sum + a.newTargets.length, 0);
-    const totalTasksInWave = MESSAGES_PER_WAVE * allNewTargetsInWave * 2; // OLD+NEW
-    console.log(
-      `   ⏱️  Wave pacing: ${allNewTargetsInWave} pairs, ${totalTasksInWave} tasks, delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task`
-    );
+      // Set initial pairing
+      db.replaceNewPairings(fullPairingMap);
+      console.log(`🔗 Pairing set: ${Object.keys(fullPairingMap).length} NEW sessions paired`);
 
-    let taskTime = normalizeToWindow(globalTaskTime);
-    const waveDay0 = taskTime.startOf('day');
+      // Generate tasks: Multi-wave rotation schedule
+      // Wave structure: OLD sessions rotate through NEW pairs
+      // Example with 5 OLD and 10 NEW (2 per OLD):
+      // Wave 1: OLD-1→NEW-2,3 | OLD-2→NEW-4,5 | OLD-3→NEW-6,7 | OLD-4→NEW-8,9 | OLD-5→NEW-10,11
+      // Wave 2: OLD-1→NEW-4,5 | OLD-2→NEW-6,7 | OLD-3→NEW-8,9 | OLD-4→NEW-10,11 | OLD-5→NEW-2,3 (rotasi)
+      // Wave 3: OLD-1→NEW-6,7 | OLD-2→NEW-8,9 | dst...
+      // dst sampai 5 waves (sebanyak OLD sessions)
 
-    for (let roundIndex = 0; roundIndex < MESSAGES_PER_WAVE; roundIndex++) {
-      for (const oldSession of oldSessions) {
-        const oldSessionName = oldSession.wahaSession;
-        const assignment = waveAssignment[oldSessionName];
-        if (!assignment || assignment.newTargets.length === 0) continue;
+      const initialDelaySeconds = 14 + Math.floor(Math.random() * 7);
+      let globalTaskTime = normalizeToWindow(now.plus({ seconds: initialDelaySeconds }));
 
-        const oldChatId = oldSessionChatIds[oldSessionName];
-        if (!oldChatId) continue;
+      // For each wave
+      for (let waveIndex = 0; waveIndex < TOTAL_WAVES; waveIndex++) {
+        console.log(`\n🌊 === WAVE ${waveIndex + 1}/${TOTAL_WAVES} ===`);
 
-        for (const newChatId of assignment.newTargets) {
-          const newSessionName =
-            newChatIdToNewSession[newChatId] ||
-            newSessionFallbackMap[newChatId] ||
-            newSessions[0]?.wahaSession;
+        // Calculate rotated assignment for this wave
+        // Rotation formula: OLD at index i gets targets from OLD at index (i + waveIndex) % TOTAL_OLD
+        const waveAssignment: Record<string, { oldSessionName: string; newTargets: string[] }> = {};
 
-          if (!newSessionName) {
-            console.error(`❌ Skipping: newChatId=${newChatId} has no session`);
-            continue;
+        for (let oldIdx = 0; oldIdx < oldSessions.length; oldIdx++) {
+          const currentOld = oldSessions[oldIdx];
+          // Get targets from the OLD session at rotated position
+          const sourceOldIdx = (oldIdx + waveIndex) % oldSessions.length;
+          const sourceOld = oldSessions[sourceOldIdx];
+          const targets = targetsByOld[sourceOld.wahaSession] || [];
+
+          waveAssignment[currentOld.wahaSession] = {
+            oldSessionName: currentOld.wahaSession,
+            newTargets: targets,
+          };
+
+          console.log(`   ${currentOld.wahaSession} → ${targets.length} targets (from ${sourceOld.wahaSession})`);
+        }
+
+        // Build pairing map for this wave
+        const wavePairingMap: Record<string, string> = {};
+        for (const [oldSessionName, assignment] of Object.entries(waveAssignment)) {
+          const oldChatId = oldSessionChatIds[oldSessionName];
+          if (!oldChatId) continue;
+
+          for (const newChatId of assignment.newTargets) {
+            const newSessionName =
+              newChatIdToNewSession[newChatId] ||
+              newSessionFallbackMap[newChatId] ||
+              newSessions[0]?.wahaSession;
+
+            if (newSessionName) {
+              wavePairingMap[newSessionName] = oldChatId;
+            }
           }
-
-          taskTime = normalizeToWindow(taskTime);
-          const dayOffset = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
-          const absoluteDay = dayOffset;
-
-          // OLD → NEW
-          tasks.push({
-            id: randomUUID(),
-            automationId,
-            dueAt: taskTime.toUTC().toISO()!,
-            chatId: newChatId,
-            senderSession: oldSessionName,
-            kind: 'script-next',
-            status: 'pending',
-            waveIndex,
-            dayIndex: absoluteDay,
-            roundIndex,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-
-          taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
-
-          taskTime = normalizeToWindow(taskTime);
-          const dayOffset2 = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
-          const absoluteDay2 = dayOffset2;
-
-          // NEW → OLD
-          tasks.push({
-            id: randomUUID(),
-            automationId,
-            dueAt: taskTime.toUTC().toISO()!,
-            chatId: oldChatId,
-            senderSession: newSessionName,
-            kind: 'script-next',
-            status: 'pending',
-            waveIndex,
-            dayIndex: absoluteDay2,
-            roundIndex,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-
-          taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
         }
+
+        // Schedule pairing update task at start of wave (except wave 1, already set above)
+        if (waveIndex > 0) {
+          tasks.push({
+            id: randomUUID(),
+            automationId,
+            dueAt: globalTaskTime.toUTC().toISO()!,
+            chatId: 'system',
+            kind: 'wa12-wave-reset',
+            status: 'pending',
+            waveIndex,
+            payload: { pairings: wavePairingMap },
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+
+          // Small buffer after pairing update before messages start
+          globalTaskTime = globalTaskTime.plus({ seconds: POST_RESET_BUFFER_SECONDS });
+        }
+
+        // Generate tasks for this wave:
+        // - Exactly MESSAGES_PER_WAVE rounds per pair (OLD→NEW then NEW→OLD)
+        // - Uses campaign-level pacing so ALL waves fit within TOTAL_WINDOWS windows
+        const allNewTargetsInWave = Object.values(waveAssignment).reduce((sum, a) => sum + a.newTargets.length, 0);
+        const totalTasksInWave = MESSAGES_PER_WAVE * allNewTargetsInWave * 2; // OLD+NEW
+        console.log(
+          `   ⏱️  Wave pacing: ${allNewTargetsInWave} pairs, ${totalTasksInWave} tasks, delay ~${Math.round(delayBetweenTasksSeconds / 60)} min/task`
+        );
+
+        let taskTime = normalizeToWindow(globalTaskTime);
+        const waveDay0 = taskTime.startOf('day');
+
+        for (let roundIndex = 0; roundIndex < MESSAGES_PER_WAVE; roundIndex++) {
+          for (const oldSession of oldSessions) {
+            const oldSessionName = oldSession.wahaSession;
+            const assignment = waveAssignment[oldSessionName];
+            if (!assignment || assignment.newTargets.length === 0) continue;
+
+            const oldChatId = oldSessionChatIds[oldSessionName];
+            if (!oldChatId) continue;
+
+            for (const newChatId of assignment.newTargets) {
+              const newSessionName =
+                newChatIdToNewSession[newChatId] ||
+                newSessionFallbackMap[newChatId] ||
+                newSessions[0]?.wahaSession;
+
+              if (!newSessionName) {
+                console.error(`❌ Skipping: newChatId=${newChatId} has no session`);
+                continue;
+              }
+
+              taskTime = normalizeToWindow(taskTime);
+              const dayOffset = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
+              const absoluteDay = dayOffset;
+
+              // OLD → NEW
+              tasks.push({
+                id: randomUUID(),
+                automationId,
+                dueAt: taskTime.toUTC().toISO()!,
+                chatId: newChatId,
+                senderSession: oldSessionName,
+                kind: 'script-next',
+                status: 'pending',
+                waveIndex,
+                dayIndex: absoluteDay,
+                roundIndex,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              });
+
+              taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
+
+              taskTime = normalizeToWindow(taskTime);
+              const dayOffset2 = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
+              const absoluteDay2 = dayOffset2;
+
+              // NEW → OLD
+              tasks.push({
+                id: randomUUID(),
+                automationId,
+                dueAt: taskTime.toUTC().toISO()!,
+                chatId: oldChatId,
+                senderSession: newSessionName,
+                kind: 'script-next',
+                status: 'pending',
+                waveIndex,
+                dayIndex: absoluteDay2,
+                roundIndex,
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              });
+
+              taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
+            }
+          }
+        }
+
+        // Continue immediately to next wave (no extra gap)
+        globalTaskTime = normalizeToWindow(taskTime);
+
+        const waveTasks = tasks.filter((t: any) => t.waveIndex === waveIndex && t.kind !== 'wa12-wave-reset');
+        console.log(`   ✅ Wave ${waveIndex + 1} complete: ${waveTasks.length} tasks, next wave starts at ${globalTaskTime.toLocaleString()}`);
       }
-    }
 
-    // Continue immediately to next wave (no extra gap)
-    globalTaskTime = normalizeToWindow(taskTime);
-    
-    const waveTasks = tasks.filter((t: any) => t.waveIndex === waveIndex && t.kind !== 'wa12-wave-reset');
-    console.log(`   ✅ Wave ${waveIndex + 1} complete: ${waveTasks.length} tasks, next wave starts at ${globalTaskTime.toLocaleString()}`);
-  }
-  
-  console.log(`\n📊 Total scheduled tasks: ${tasks.length} (${TOTAL_WAVES} waves × ${MESSAGES_PER_WAVE * 2} messages/wave × ${orderedTargets.length / oldSessions.length} pairs/OLD)`);
+      console.log(`\n📊 Total scheduled tasks: ${tasks.length} (${TOTAL_WAVES} waves × ${MESSAGES_PER_WAVE * 2} messages/wave × ${orderedTargets.length / oldSessions.length} pairs/OLD)`);
 
-  
-  // Show first 3 task due times for debugging
-  const sortedTasks = [...tasks].sort((a, b) => String(a.dueAt).localeCompare(String(b.dueAt)));
-  console.log(`📅 First 3 tasks due at:`);
-  for (let i = 0; i < Math.min(3, sortedTasks.length); i++) {
-    const task = sortedTasks[i];
-    const dueTime = DateTime.fromISO(String(task.dueAt), { zone: 'utc' }).setZone(tz);
-    console.log(`   ${i + 1}. ${dueTime.toLocaleString(DateTime.DATETIME_SHORT)} - ${task.senderSession} → ${task.chatId.substring(0, 12)}...`);
-  }
 
-  db.replaceScheduledTasksForAutomation(automationId, tasks);
+      // Show first 3 task due times for debugging
+      const sortedTasks = [...tasks].sort((a, b) => String(a.dueAt).localeCompare(String(b.dueAt)));
+      console.log(`📅 First 3 tasks due at:`);
+      for (let i = 0; i < Math.min(3, sortedTasks.length); i++) {
+        const task = sortedTasks[i];
+        const dueTime = DateTime.fromISO(String(task.dueAt), { zone: 'utc' }).setZone(tz);
+        console.log(`   ${i + 1}. ${dueTime.toLocaleString(DateTime.DATETIME_SHORT)} - ${task.senderSession} → ${task.chatId.substring(0, 12)}...`);
+      }
 
-  // Keep NEW webhook suppressed until the last scheduled task is done (+1 hour)
-  let maxDueAt: string | null = null;
-  for (const t of tasks) {
-    if (!maxDueAt || String(t.dueAt) > maxDueAt) maxDueAt = String(t.dueAt);
-  }
-  if (maxDueAt) {
-    const until = DateTime.fromISO(maxDueAt, { zone: 'utc' }).plus({ hours: 1 }).toUTC().toISO()!;
-    db.setSuppressNewAutoReplyUntil(until);
-  } else {
-    db.setSuppressNewAutoReplyUntil(null);
-  }
+      db.replaceScheduledTasksForAutomation(automationId, tasks);
+
+      // Keep NEW webhook suppressed until the last scheduled task is done (+1 hour)
+      let maxDueAt: string | null = null;
+      for (const t of tasks) {
+        if (!maxDueAt || String(t.dueAt) > maxDueAt) maxDueAt = String(t.dueAt);
+      }
+      if (maxDueAt) {
+        const until = DateTime.fromISO(maxDueAt, { zone: 'utc' }).plus({ hours: 1 }).toUTC().toISO()!;
+        db.setSuppressNewAutoReplyUntil(until);
+      } else {
+        db.setSuppressNewAutoReplyUntil(null);
+      }
 
       console.log(`🎉 Campaign ${automationId} fully initialized: ${tasks.length} wave tasks scheduled`);
     } catch (error: any) {
@@ -1310,7 +1311,7 @@ app.post('/waha/webhook', async (req, res) => {
       }
 
       await sendTextQueued({ session: config.wahaSession, chatId: String(chatId), text: picked.text });
-      
+
       // Update progress dengan message count increment (incoming + outgoing = +2)
       const newMessageCount = (progress.messageCount || 0) + 2; // +1 untuk incoming, +1 untuk outgoing
       db.setChatProgress(config.wahaSession, String(chatId), {
