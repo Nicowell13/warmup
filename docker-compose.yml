@@ -1,10 +1,10 @@
 services:
   waha:
-    image: devlikeapro/waha-plus:noweb
+    image: devlikeapro/waha-plus:latest
     container_name: waha
     restart: unless-stopped
     environment:
-      # IMPORTANT: adjust for WAHA Plus features if you use Plus.
+      # Engine set to NOWEB for lower resource usage and better anti-detection
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
       - WAHA_LOG_LEVEL=info
       # If your WAHA requires API key (401 Unauthorized without it), set it here
