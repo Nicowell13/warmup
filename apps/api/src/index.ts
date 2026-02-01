@@ -702,6 +702,42 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
           // Small buffer after pairing update before messages start
           globalTaskTime = globalTaskTime.plus({ seconds: POST_RESET_BUFFER_SECONDS });
+
+          // CRITICAL FIX: OLD must send first message to NEW after pairing change
+          // This "opens" the conversation so NEW can safely reply
+          console.log(`   🔄 Wave ${waveIndex + 1}: Scheduling OLD→NEW init messages (OLD sends first)`);
+
+          for (const oldSession of oldSessions) {
+            const oldSessionName = oldSession.wahaSession;
+            const assignment = waveAssignment[oldSessionName];
+            if (!assignment || assignment.newTargets.length === 0) continue;
+
+            for (const newChatId of assignment.newTargets) {
+              globalTaskTime = normalizeToWindow(globalTaskTime);
+
+              // OLD sends FIRST to NEW to open conversation
+              tasks.push({
+                id: randomUUID(),
+                automationId,
+                dueAt: globalTaskTime.toUTC().toISO()!,
+                chatId: newChatId,
+                senderSession: oldSessionName,
+                kind: 'script-next',
+                status: 'pending',
+                waveIndex,
+                dayIndex: 0,
+                roundIndex: -1, // Special "init" round
+                isWaveInit: true, // Mark as wave initialization
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              });
+
+              globalTaskTime = globalTaskTime.plus({ seconds: delayBetweenTasksSeconds });
+            }
+          }
+
+          // Extra buffer after init messages before normal rounds start
+          globalTaskTime = globalTaskTime.plus({ seconds: POST_RESET_BUFFER_SECONDS * 2 });
         }
 
         // Generate tasks for this wave:
