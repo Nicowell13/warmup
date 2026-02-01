@@ -85,6 +85,9 @@ type DbShape = {
   flags?: {
     suppressNewAutoReplyUntil?: string | null;
   };
+  // Group feature
+  groups?: GroupRecord[];
+  groupJoins?: GroupJoinRecord[];
 };
 
 export type DailySessionStats = {
@@ -92,6 +95,29 @@ export type DailySessionStats = {
   date: string; // YYYY-MM-DD
   messagesSent: number;
   lastMessageAt: string;
+};
+
+// ===== Group Feature Types =====
+export type GroupRecord = {
+  id: string;
+  name: string;                    // Display name untuk group
+  inviteLink: string;              // https://chat.whatsapp.com/xxx
+  inviteCode: string;              // xxx (extracted dari link)
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GroupJoinRecord = {
+  id: string;
+  groupId: string;                 // Reference ke GroupRecord
+  sessionName: string;             // e.g. "new-1"
+  chatId: string;                  // e.g. "628xxx@c.us"
+  status: 'pending' | 'joining' | 'joined' | 'failed';
+  retryCount: number;              // Track retry attempts (max 3)
+  errorMessage?: string;
+  joinedAt?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -109,7 +135,7 @@ const DB_FILE = getDbFilePath();
 
 function readDb(): DbShape {
   if (!fs.existsSync(DB_FILE)) {
-    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [], newPairings: {}, dailyStats: {}, flags: {} };
+    return { sessions: [], chatProgress: {}, automations: [], scheduledTasks: [], newPairings: {}, dailyStats: {}, flags: {}, groups: [], groupJoins: [] };
   }
   const raw = fs.readFileSync(DB_FILE, 'utf8');
   const parsed = JSON.parse(raw) as DbShape;
@@ -121,6 +147,8 @@ function readDb(): DbShape {
     newPairings: parsed.newPairings || {},
     dailyStats: parsed.dailyStats || {},
     flags: parsed.flags || {},
+    groups: parsed.groups || [],
+    groupJoins: parsed.groupJoins || [],
   };
 }
 
@@ -474,5 +502,132 @@ export const db = {
 
     if (cleaned > 0) writeDb(dbState);
     return cleaned;
+  },
+
+  // ===== Group Feature Functions =====
+
+  listGroups(): GroupRecord[] {
+    return readDb().groups || [];
+  },
+
+  getGroupById(id: string): GroupRecord | undefined {
+    return (readDb().groups || []).find((g) => g.id === id);
+  },
+
+  createGroup(group: Omit<GroupRecord, 'createdAt' | 'updatedAt'>): GroupRecord {
+    const now = new Date().toISOString();
+    const dbState = readDb();
+    if (!dbState.groups) dbState.groups = [];
+
+    const created: GroupRecord = {
+      ...group,
+      createdAt: now,
+      updatedAt: now,
+    };
+    dbState.groups.push(created);
+    writeDb(dbState);
+    return created;
+  },
+
+  deleteGroup(id: string): boolean {
+    const dbState = readDb();
+    const before = (dbState.groups || []).length;
+    dbState.groups = (dbState.groups || []).filter((g) => g.id !== id);
+    // Also delete related joins
+    dbState.groupJoins = (dbState.groupJoins || []).filter((j) => j.groupId !== id);
+    const after = (dbState.groups || []).length;
+    if (after !== before) {
+      writeDb(dbState);
+      return true;
+    }
+    return false;
+  },
+
+  listGroupJoins(groupId?: string): GroupJoinRecord[] {
+    const dbState = readDb();
+    const joins = dbState.groupJoins || [];
+    if (groupId) {
+      return joins.filter((j) => j.groupId === groupId);
+    }
+    return joins;
+  },
+
+  getGroupJoinById(id: string): GroupJoinRecord | undefined {
+    return (readDb().groupJoins || []).find((j) => j.id === id);
+  },
+
+  upsertGroupJoin(record: GroupJoinRecord): GroupJoinRecord {
+    const now = new Date().toISOString();
+    const dbState = readDb();
+    if (!dbState.groupJoins) dbState.groupJoins = [];
+
+    const idx = dbState.groupJoins.findIndex((j) => j.id === record.id);
+    if (idx >= 0) {
+      const updated = { ...dbState.groupJoins[idx], ...record, updatedAt: now };
+      dbState.groupJoins[idx] = updated;
+      writeDb(dbState);
+      return updated;
+    }
+
+    const created: GroupJoinRecord = {
+      ...record,
+      createdAt: record.createdAt || now,
+      updatedAt: now,
+    };
+    dbState.groupJoins.push(created);
+    writeDb(dbState);
+    return created;
+  },
+
+  // Get sessions that are eligible for group join (automation completed)
+  getEligibleNewSessions(): Array<{ sessionName: string; chatId: string; automationName?: string }> {
+    const dbState = readDb();
+    const newSessions = (dbState.sessions || []).filter((s) => s.cluster === 'new');
+    const automations = dbState.automations || [];
+    const tasks = dbState.scheduledTasks || [];
+
+    const eligible: Array<{ sessionName: string; chatId: string; automationName?: string }> = [];
+
+    for (const session of newSessions) {
+      // Find automation that has this session
+      for (const auto of automations) {
+        const autoTasks = tasks.filter((t) => t.automationId === auto.id);
+        if (autoTasks.length === 0) continue;
+
+        // Check if automation is completed (no pending tasks)
+        const pendingCount = autoTasks.filter((t) => t.status === 'pending').length;
+        if (pendingCount > 0) continue;
+
+        // Find chatId for this session from tasks
+        const sessionTask = autoTasks.find((t) => t.senderSession === session.wahaSession || t.targetNewChatId);
+        const chatId = sessionTask?.targetNewChatId || sessionTask?.chatId;
+
+        if (chatId && !eligible.some((e) => e.sessionName === session.wahaSession && e.chatId === chatId)) {
+          eligible.push({
+            sessionName: session.wahaSession,
+            chatId,
+            automationName: auto.name,
+          });
+        }
+      }
+    }
+
+    return eligible;
+  },
+
+  // Check if session already joined a specific group
+  hasSessionJoinedGroup(groupId: string, sessionName: string): boolean {
+    const dbState = readDb();
+    return (dbState.groupJoins || []).some(
+      (j) => j.groupId === groupId && j.sessionName === sessionName && j.status === 'joined'
+    );
+  },
+
+  // Get pending joins that need retry
+  getPendingGroupJoins(): GroupJoinRecord[] {
+    const dbState = readDb();
+    return (dbState.groupJoins || []).filter(
+      (j) => j.status === 'pending' || (j.status === 'failed' && j.retryCount < 3)
+    );
   },
 };

@@ -6,9 +6,10 @@ import { clearToken } from '../lib/auth';
 
 const NAV = [
   { href: '/sessions', label: 'Sessions' },
- 
+
   { href: '/campaigns', label: 'Campaigns' },
   { href: '/automations', label: 'Automations' },
+  { href: '/groups', label: 'Groups' },
 ];
 
 function cx(...classes) {

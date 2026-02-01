@@ -203,3 +203,18 @@ export async function wahaStopTyping(session: string, chatId: string) {
   });
 }
 
+// Docs: POST /api/{session}/groups/join - Join group using invite code
+export async function wahaJoinGroup(session: string, inviteCode: string): Promise<{ ok: boolean; error?: string; groupId?: string }> {
+  try {
+    const data: any = await wahaRequestJson(`/api/${encodeURIComponent(session)}/groups/join`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ code: inviteCode }),
+    });
+    return { ok: true, groupId: data?.id || data?.groupId };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || 'Unknown error' };
+  }
+}

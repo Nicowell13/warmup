@@ -7,7 +7,7 @@ import { DateTime } from 'luxon';
 
 import { db } from './db.js';
 import { requireAuth, signToken, verifyAdminPassword } from './auth.js';
-import { wahaDeleteSession, wahaGetQrBase64, wahaListSessions, wahaRequestPairingCode, wahaStartSession } from './waha.js';
+import { wahaDeleteSession, wahaGetQrBase64, wahaJoinGroup, wahaListSessions, wahaRequestPairingCode, wahaStartSession } from './waha.js';
 import { pickRandom, pickReplyFromScript } from './script.js';
 import { startScheduler } from './scheduler.js';
 import { WA12_PRESET } from './presets/wa12Preset.js';
@@ -1177,6 +1177,289 @@ app.post('/campaigns/start', requireAuth, async (req, res) => {
   }
 
   return res.json({ ok: true, results });
+});
+
+// ===== GROUP FEATURE ENDPOINTS =====
+
+// Helper: Extract invite code from WhatsApp group link
+function extractInviteCode(inviteLink: string): string | null {
+  // Supports: https://chat.whatsapp.com/xxx or just xxx
+  const match = inviteLink.match(/chat\.whatsapp\.com\/([A-Za-z0-9]+)/);
+  if (match) return match[1];
+  // If no URL pattern, maybe it's just the code
+  if (/^[A-Za-z0-9]{10,}$/.test(inviteLink.trim())) {
+    return inviteLink.trim();
+  }
+  return null;
+}
+
+// List all groups
+app.get('/groups', requireAuth, (_req, res) => {
+  const groups = db.listGroups();
+  // Add join stats for each group
+  const groupsWithStats = groups.map((g) => {
+    const joins = db.listGroupJoins(g.id);
+    return {
+      ...g,
+      stats: {
+        total: joins.length,
+        joined: joins.filter((j) => j.status === 'joined').length,
+        pending: joins.filter((j) => j.status === 'pending' || j.status === 'joining').length,
+        failed: joins.filter((j) => j.status === 'failed').length,
+      },
+    };
+  });
+  return res.json({ groups: groupsWithStats });
+});
+
+// Create a new group
+app.post('/groups', requireAuth, (req, res) => {
+  const bodySchema = z.object({
+    name: z.string().min(1).max(100),
+    inviteLink: z.string().min(1),
+  });
+
+  const parsed = bodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  const inviteCode = extractInviteCode(parsed.data.inviteLink);
+  if (!inviteCode) {
+    return res.status(400).json({ error: 'Invalid invite link format. Expected: https://chat.whatsapp.com/xxx or invite code' });
+  }
+
+  const group = db.createGroup({
+    id: randomUUID(),
+    name: parsed.data.name,
+    inviteLink: parsed.data.inviteLink,
+    inviteCode,
+  });
+
+  return res.status(201).json({ group });
+});
+
+// Get group details
+app.get('/groups/:id', requireAuth, (req, res) => {
+  const group = db.getGroupById(req.params.id);
+  if (!group) {
+    return res.status(404).json({ error: 'Group not found' });
+  }
+  const joins = db.listGroupJoins(group.id);
+  return res.json({ group, joins });
+});
+
+// Delete a group
+app.delete('/groups/:id', requireAuth, (req, res) => {
+  const ok = db.deleteGroup(req.params.id);
+  if (!ok) {
+    return res.status(404).json({ error: 'Group not found' });
+  }
+  return res.status(204).send();
+});
+
+// Get eligible sessions (automation completed)
+app.get('/groups/eligible-sessions', requireAuth, (_req, res) => {
+  const eligible = db.getEligibleNewSessions();
+  return res.json({ eligibleSessions: eligible });
+});
+
+// List joins for a specific group
+app.get('/groups/:id/joins', requireAuth, (req, res) => {
+  const group = db.getGroupById(req.params.id);
+  if (!group) {
+    return res.status(404).json({ error: 'Group not found' });
+  }
+  const joins = db.listGroupJoins(group.id);
+  return res.json({ joins });
+});
+
+// Trigger join for selected sessions
+app.post('/groups/:id/join', requireAuth, async (req, res) => {
+  const group = db.getGroupById(req.params.id);
+  if (!group) {
+    return res.status(404).json({ error: 'Group not found' });
+  }
+
+  const bodySchema = z.object({
+    sessions: z.array(z.object({
+      sessionName: z.string().min(1),
+      chatId: z.string().min(1),
+    })).min(1),
+  });
+
+  const parsed = bodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  // Create pending join records
+  const joinRecords: Array<{ id: string; sessionName: string; chatId: string }> = [];
+  for (const session of parsed.data.sessions) {
+    // Check if already joined
+    if (db.hasSessionJoinedGroup(group.id, session.sessionName)) {
+      continue; // Skip already joined
+    }
+
+    const joinId = randomUUID();
+    db.upsertGroupJoin({
+      id: joinId,
+      groupId: group.id,
+      sessionName: session.sessionName,
+      chatId: session.chatId,
+      status: 'pending',
+      retryCount: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    joinRecords.push({ id: joinId, sessionName: session.sessionName, chatId: session.chatId });
+  }
+
+  // Process joins in background with delay between each
+  (async () => {
+    console.log(`🔗 Starting group join for ${joinRecords.length} sessions to group "${group.name}"`);
+
+    for (let i = 0; i < joinRecords.length; i++) {
+      const record = joinRecords[i];
+      const join = db.getGroupJoinById(record.id);
+      if (!join) continue;
+
+      // Update status to joining
+      db.upsertGroupJoin({ ...join, status: 'joining' });
+      console.log(`  [${i + 1}/${joinRecords.length}] Joining: ${record.sessionName}`);
+
+      // Try to join (with retry up to 3 times)
+      let success = false;
+      let lastError = '';
+      let retryCount = join.retryCount || 0;
+
+      while (!success && retryCount < 3) {
+        const result = await wahaJoinGroup(record.sessionName, group.inviteCode);
+
+        if (result.ok) {
+          success = true;
+          db.upsertGroupJoin({
+            ...join,
+            status: 'joined',
+            retryCount,
+            joinedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          console.log(`    ✅ Joined successfully`);
+        } else {
+          retryCount++;
+          lastError = result.error || 'Unknown error';
+          console.log(`    ❌ Attempt ${retryCount}/3 failed: ${lastError}`);
+
+          if (retryCount < 3) {
+            // Wait 10-15 seconds before retry
+            const retryDelay = 10000 + Math.random() * 5000;
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          }
+        }
+      }
+
+      if (!success) {
+        db.upsertGroupJoin({
+          ...join,
+          status: 'failed',
+          retryCount,
+          errorMessage: lastError,
+          updatedAt: new Date().toISOString(),
+        });
+        console.log(`    ❌ Failed after 3 attempts`);
+      }
+
+      // Delay 10-15 seconds before next session (variative)
+      if (i < joinRecords.length - 1) {
+        const delay = 10000 + Math.random() * 5000;
+        console.log(`    ⏳ Waiting ${Math.round(delay / 1000)}s before next...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    console.log(`🔗 Group join completed for "${group.name}"`);
+  })(); // Run in background
+
+  return res.json({
+    ok: true,
+    message: `Join process started for ${joinRecords.length} sessions. Check status via GET /groups/${group.id}/joins`,
+    queued: joinRecords.length,
+    skippedAlreadyJoined: parsed.data.sessions.length - joinRecords.length,
+  });
+});
+
+// Retry failed joins for a group
+app.post('/groups/:id/retry', requireAuth, async (req, res) => {
+  const group = db.getGroupById(req.params.id);
+  if (!group) {
+    return res.status(404).json({ error: 'Group not found' });
+  }
+
+  // Get failed joins that can be retried
+  const failedJoins = db.listGroupJoins(group.id).filter((j) => j.status === 'failed' && j.retryCount < 3);
+
+  if (failedJoins.length === 0) {
+    return res.json({ ok: true, message: 'No failed joins to retry', retriedCount: 0 });
+  }
+
+  // Reset status to pending for retry
+  for (const join of failedJoins) {
+    db.upsertGroupJoin({
+      ...join,
+      status: 'pending',
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  // Process retries in background (similar to join)
+  (async () => {
+    console.log(`🔄 Retrying ${failedJoins.length} failed joins for group "${group.name}"`);
+
+    for (let i = 0; i < failedJoins.length; i++) {
+      const join = db.getGroupJoinById(failedJoins[i].id);
+      if (!join || join.status !== 'pending') continue;
+
+      db.upsertGroupJoin({ ...join, status: 'joining' });
+      console.log(`  [${i + 1}/${failedJoins.length}] Retrying: ${join.sessionName}`);
+
+      const result = await wahaJoinGroup(join.sessionName, group.inviteCode);
+
+      if (result.ok) {
+        db.upsertGroupJoin({
+          ...join,
+          status: 'joined',
+          retryCount: join.retryCount + 1,
+          joinedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        console.log(`    ✅ Joined successfully on retry`);
+      } else {
+        db.upsertGroupJoin({
+          ...join,
+          status: 'failed',
+          retryCount: join.retryCount + 1,
+          errorMessage: result.error || 'Unknown error',
+          updatedAt: new Date().toISOString(),
+        });
+        console.log(`    ❌ Retry failed: ${result.error}`);
+      }
+
+      // Delay 10-15 seconds before next
+      if (i < failedJoins.length - 1) {
+        const delay = 10000 + Math.random() * 5000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    console.log(`🔄 Retry completed for group "${group.name}"`);
+  })();
+
+  return res.json({
+    ok: true,
+    message: `Retry started for ${failedJoins.length} failed joins`,
+    retriedCount: failedJoins.length,
+  });
 });
 
 // Webhook endpoint for WAHA.
