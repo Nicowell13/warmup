@@ -1239,6 +1239,12 @@ app.post('/groups', requireAuth, (req, res) => {
   return res.status(201).json({ group });
 });
 
+// Get all NEW sessions for group join
+app.get('/groups/eligible-sessions', requireAuth, (_req, res) => {
+  const eligible = db.getEligibleNewSessions();
+  return res.json({ eligibleSessions: eligible });
+});
+
 // Get group details
 app.get('/groups/:id', requireAuth, (req, res) => {
   const group = db.getGroupById(req.params.id);
@@ -1256,12 +1262,6 @@ app.delete('/groups/:id', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'Group not found' });
   }
   return res.status(204).send();
-});
-
-// Get eligible sessions (automation completed)
-app.get('/groups/eligible-sessions', requireAuth, (_req, res) => {
-  const eligible = db.getEligibleNewSessions();
-  return res.json({ eligibleSessions: eligible });
 });
 
 // List joins for a specific group
