@@ -201,7 +201,7 @@ export default function GroupsPage() {
             <div className="rounded-2xl border bg-white p-5">
                 <h1 className="text-xl font-semibold">Groups</h1>
                 <p className="mt-1 text-sm text-gray-600">
-                    Masukkan nomor warm-up yang sudah selesai ke WhatsApp group via invitation link.
+                    Masukkan nomor NEW ke WhatsApp group via invitation link.
                 </p>
             </div>
 
@@ -301,12 +301,12 @@ export default function GroupsPage() {
                     <div className="w-full max-w-lg rounded-2xl bg-white p-6">
                         <h3 className="text-lg font-semibold">Pilih Sessions untuk Join</h3>
                         <p className="mt-1 text-sm text-gray-600">
-                            Sessions yang eligible adalah nomor NEW yang sudah selesai warm-up.
+                            Semua session NEW dapat dipilih untuk join group.
                         </p>
 
                         <div className="mt-4 max-h-64 overflow-y-auto space-y-2">
                             {eligibleSessions.length === 0 ? (
-                                <div className="text-sm text-gray-500">Tidak ada session eligible. Pastikan automation sudah selesai.</div>
+                                <div className="text-sm text-gray-500">Tidak ada session NEW. Tambahkan session cluster NEW terlebih dahulu di halaman Sessions.</div>
                             ) : (
                                 eligibleSessions.map((s) => {
                                     const key = `${s.sessionName}:${s.chatId}`;
@@ -314,8 +314,7 @@ export default function GroupsPage() {
                                     return (
                                         <label
                                             key={key}
-                                            className={`flex items-center gap-3 rounded-lg border p-3 cursor-pointer hover:bg-gray-50 ${isSelected ? 'border-gray-900 bg-gray-50' : ''
-                                                }`}
+                                            className={`flex items-center gap-3 rounded-lg border p-3 cursor-pointer hover:bg-gray-50 ${isSelected ? 'border-gray-900 bg-gray-50' : ''}`}
                                         >
                                             <input
                                                 type="checkbox"
@@ -325,8 +324,6 @@ export default function GroupsPage() {
                                             />
                                             <div className="flex-1">
                                                 <div className="text-sm font-medium">{s.sessionName}</div>
-                                                <div className="text-xs text-gray-500">{s.chatId}</div>
-                                                {s.automationName && <div className="text-xs text-gray-400">From: {s.automationName}</div>}
                                             </div>
                                         </label>
                                     );
@@ -344,41 +341,44 @@ export default function GroupsPage() {
                         </div>
                     </div>
                 </div>
-            )}
+            )
+            }
 
             {/* Status Modal */}
-            {showJoins && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-                    <div className="w-full max-w-lg rounded-2xl bg-white p-6">
-                        <h3 className="text-lg font-semibold">Status Join</h3>
+            {
+                showJoins && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+                        <div className="w-full max-w-lg rounded-2xl bg-white p-6">
+                            <h3 className="text-lg font-semibold">Status Join</h3>
 
-                        <div className="mt-4 max-h-80 overflow-y-auto space-y-2">
-                            {loadingJoins ? (
-                                <div className="text-sm text-gray-500">Loading...</div>
-                            ) : joins.length === 0 ? (
-                                <div className="text-sm text-gray-500">Belum ada join untuk group ini.</div>
-                            ) : (
-                                joins.map((j) => (
-                                    <div key={j.id} className="flex items-center justify-between rounded-lg border p-3">
-                                        <div>
-                                            <div className="text-sm font-medium">{j.sessionName}</div>
-                                            <div className="text-xs text-gray-500">{j.chatId}</div>
-                                            {j.errorMessage && <div className="text-xs text-red-500 mt-1">{j.errorMessage}</div>}
+                            <div className="mt-4 max-h-80 overflow-y-auto space-y-2">
+                                {loadingJoins ? (
+                                    <div className="text-sm text-gray-500">Loading...</div>
+                                ) : joins.length === 0 ? (
+                                    <div className="text-sm text-gray-500">Belum ada join untuk group ini.</div>
+                                ) : (
+                                    joins.map((j) => (
+                                        <div key={j.id} className="flex items-center justify-between rounded-lg border p-3">
+                                            <div>
+                                                <div className="text-sm font-medium">{j.sessionName}</div>
+                                                <div className="text-xs text-gray-500">{j.chatId}</div>
+                                                {j.errorMessage && <div className="text-xs text-red-500 mt-1">{j.errorMessage}</div>}
+                                            </div>
+                                            <StatusBadge status={j.status} />
                                         </div>
-                                        <StatusBadge status={j.status} />
-                                    </div>
-                                ))
-                            )}
-                        </div>
+                                    ))
+                                )}
+                            </div>
 
-                        <div className="mt-6 flex justify-end">
-                            <Button variant="secondary" onClick={() => setShowJoins(null)}>
-                                Tutup
-                            </Button>
+                            <div className="mt-6 flex justify-end">
+                                <Button variant="secondary" onClick={() => setShowJoins(null)}>
+                                    Tutup
+                                </Button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 }

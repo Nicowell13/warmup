@@ -579,40 +579,15 @@ export const db = {
     return created;
   },
 
-  // Get sessions that are eligible for group join (automation completed)
-  getEligibleNewSessions(): Array<{ sessionName: string; chatId: string; automationName?: string }> {
+  // Get all NEW sessions for group join (no eligibility check)
+  getEligibleNewSessions(): Array<{ sessionName: string; chatId: string }> {
     const dbState = readDb();
     const newSessions = (dbState.sessions || []).filter((s) => s.cluster === 'new');
-    const automations = dbState.automations || [];
-    const tasks = dbState.scheduledTasks || [];
 
-    const eligible: Array<{ sessionName: string; chatId: string; automationName?: string }> = [];
-
-    for (const session of newSessions) {
-      // Find automation that has this session
-      for (const auto of automations) {
-        const autoTasks = tasks.filter((t) => t.automationId === auto.id);
-        if (autoTasks.length === 0) continue;
-
-        // Check if automation is completed (no pending tasks)
-        const pendingCount = autoTasks.filter((t) => t.status === 'pending').length;
-        if (pendingCount > 0) continue;
-
-        // Find chatId for this session from tasks
-        const sessionTask = autoTasks.find((t) => t.senderSession === session.wahaSession || t.targetNewChatId);
-        const chatId = sessionTask?.targetNewChatId || sessionTask?.chatId;
-
-        if (chatId && !eligible.some((e) => e.sessionName === session.wahaSession && e.chatId === chatId)) {
-          eligible.push({
-            sessionName: session.wahaSession,
-            chatId,
-            automationName: auto.name,
-          });
-        }
-      }
-    }
-
-    return eligible;
+    return newSessions.map((s) => ({
+      sessionName: s.wahaSession,
+      chatId: s.wahaSession, // Use session name as placeholder, real chatId comes from WAHA
+    }));
   },
 
   // Check if session already joined a specific group
