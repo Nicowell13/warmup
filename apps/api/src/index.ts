@@ -8,7 +8,7 @@ import { DateTime } from 'luxon';
 import { db } from './db.js';
 import { requireAuth, signToken, verifyAdminPassword } from './auth.js';
 import { wahaDeleteSession, wahaGetQrBase64, wahaJoinGroup, wahaListSessions, wahaRequestPairingCode, wahaStartSession } from './waha.js';
-import { pickRandom, pickReplyFromScript } from './script.js';
+import { pickRandom, pickReplyFromScript, getRandomStartLine } from './script.js';
 import { startScheduler } from './scheduler.js';
 import { WA12_PRESET } from './presets/wa12Preset.js';
 import { sendTextQueued } from './sendQueue.js';
@@ -500,34 +500,58 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       // This prevents NEW webhook from firing immediately (spiky pattern / inconsistent pairing).
       db.setSuppressNewAutoReplyUntil(DateTime.now().plus({ days: 7 }).toUTC().toISO()!);
 
-      // Campaign initial send: OLD sends first to each NEW target
+      // Generate random start lines for each session (Interleaved Round-Robin feature)
+      // OLD sessions use odd parity, NEW sessions use even parity
+      const sessionRandomStartLines: Record<string, number> = {};
+      for (const oldSession of oldSessions) {
+        const parity = oldSession.scriptLineParity || 'odd';
+        const randomStart = getRandomStartLine(oldSession.autoReplyScriptText || '', parity);
+        sessionRandomStartLines[oldSession.wahaSession] = randomStart;
+        console.log(`   🎲 ${oldSession.wahaSession} random start: line ${randomStart + 1} (parity: ${parity})`);
+      }
+      for (const newSession of newSessions) {
+        const parity = newSession.scriptLineParity || 'even';
+        const randomStart = getRandomStartLine(newSession.autoReplyScriptText || '', parity);
+        sessionRandomStartLines[newSession.wahaSession] = randomStart;
+        console.log(`   🎲 ${newSession.wahaSession} random start: line ${randomStart + 1} (parity: ${parity})`);
+      }
+
+      // Campaign initial send: OLD sends first to each NEW target (using Interleaved pattern)
       const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
-      for (let i = 0; i < orderedTargets.length; i++) {
-        const chatId = orderedTargets[i];
-        const oldIndex = Math.floor(i / 2) % oldSessions.length;
-        const oldSession = oldSessions[oldIndex];
-        const oldSessionName = oldSession.wahaSession;
-        try {
-          const parity = oldSession.scriptLineParity || 'odd';
-          const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, 0, parity);
-          if (!picked) {
-            campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
-            continue;
+
+      // Interleaved initial send: OLD-1→NEW-1, OLD-2→NEW-2, OLD-3→NEW-3, OLD-1→NEW-2, ...
+      for (let shift = 0; shift < Math.ceil(orderedTargets.length / oldSessions.length); shift++) {
+        for (let oldIdx = 0; oldIdx < oldSessions.length; oldIdx++) {
+          const targetIdx = oldIdx + (shift * oldSessions.length);
+          if (targetIdx >= orderedTargets.length) continue;
+
+          const chatId = orderedTargets[targetIdx];
+          const oldSession = oldSessions[oldIdx];
+          const oldSessionName = oldSession.wahaSession;
+
+          try {
+            const parity = oldSession.scriptLineParity || 'odd';
+            const startLine = sessionRandomStartLines[oldSessionName] || 0;
+            const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, startLine, parity);
+            if (!picked) {
+              campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
+              continue;
+            }
+
+            await sendTextQueued({ session: oldSession.wahaSession, chatId: String(chatId), text: picked.text });
+            db.setChatProgress(oldSession.wahaSession, String(chatId), {
+              seasonIndex: picked.nextSeasonIndex,
+              lineIndex: picked.nextLineIndex,
+              messageCount: 1, // Initial count
+              lastOldIndex: oldIdx,
+              lastMessageAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+
+            campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: true });
+          } catch (e: any) {
+            campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: e?.message || 'unknown' });
           }
-
-          await sendTextQueued({ session: oldSession.wahaSession, chatId: String(chatId), text: picked.text });
-          db.setChatProgress(oldSession.wahaSession, String(chatId), {
-            seasonIndex: picked.nextSeasonIndex,
-            lineIndex: picked.nextLineIndex,
-            messageCount: 1, // Initial count
-            lastOldIndex: oldIndex,
-            lastMessageAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-
-          campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: true });
-        } catch (e: any) {
-          campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: e?.message || 'unknown' });
         }
       }
 
@@ -753,13 +777,22 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         const waveDay0 = taskTime.startOf('day');
 
         for (let roundIndex = 0; roundIndex < MESSAGES_PER_WAVE; roundIndex++) {
+          // Collect all NEW targets for this wave
+          const allNewTargetsInCurrentWave: Array<{ newChatId: string; newSessionName: string }> = [];
+          const allOldInfoInCurrentWave: Array<{ oldSessionName: string; oldChatId: string }> = [];
+
           for (const oldSession of oldSessions) {
             const oldSessionName = oldSession.wahaSession;
-            const assignment = waveAssignment[oldSessionName];
-            if (!assignment || assignment.newTargets.length === 0) continue;
-
             const oldChatId = oldSessionChatIds[oldSessionName];
             if (!oldChatId) continue;
+
+            // Add OLD info
+            if (!allOldInfoInCurrentWave.find(o => o.oldSessionName === oldSessionName)) {
+              allOldInfoInCurrentWave.push({ oldSessionName, oldChatId });
+            }
+
+            const assignment = waveAssignment[oldSessionName];
+            if (!assignment || assignment.newTargets.length === 0) continue;
 
             for (const newChatId of assignment.newTargets) {
               const newSessionName =
@@ -767,14 +800,28 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
                 newSessionFallbackMap[newChatId] ||
                 newSessions[0]?.wahaSession;
 
-              if (!newSessionName) {
-                console.error(`❌ Skipping: newChatId=${newChatId} has no session`);
-                continue;
+              if (!newSessionName) continue;
+
+              // Add NEW info if not already added
+              if (!allNewTargetsInCurrentWave.find(n => n.newChatId === newChatId)) {
+                allNewTargetsInCurrentWave.push({ newChatId, newSessionName });
               }
+            }
+          }
+
+          // === INTERLEAVED ROUND-ROBIN: OLD → NEW ===
+          // Pattern: OLD-1→NEW-1, OLD-2→NEW-2, OLD-3→NEW-3, OLD-1→NEW-2, OLD-2→NEW-3, OLD-3→NEW-1, ...
+          const totalOldNewPairs = allOldInfoInCurrentWave.length * allNewTargetsInCurrentWave.length;
+          console.log(`   📨 Round ${roundIndex + 1}: ${totalOldNewPairs} OLD→NEW pairs (interleaved)`);
+
+          for (let shift = 0; shift < allNewTargetsInCurrentWave.length; shift++) {
+            for (let oldIdx = 0; oldIdx < allOldInfoInCurrentWave.length; oldIdx++) {
+              const { oldSessionName } = allOldInfoInCurrentWave[oldIdx];
+              const newTargetIdx = (oldIdx + shift) % allNewTargetsInCurrentWave.length;
+              const { newChatId } = allNewTargetsInCurrentWave[newTargetIdx];
 
               taskTime = normalizeToWindow(taskTime);
               const dayOffset = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
-              const absoluteDay = dayOffset;
 
               // OLD → NEW
               tasks.push({
@@ -786,17 +833,28 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
                 kind: 'script-next',
                 status: 'pending',
                 waveIndex,
-                dayIndex: absoluteDay,
+                dayIndex: dayOffset,
                 roundIndex,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),
               });
 
               taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
+            }
+          }
+
+          // === INTERLEAVED ROUND-ROBIN: NEW → OLD ===
+          // Pattern: NEW-1→OLD-1, NEW-2→OLD-2, NEW-3→OLD-3, NEW-1→OLD-2, NEW-2→OLD-3, NEW-3→OLD-1, ...
+          console.log(`   📩 Round ${roundIndex + 1}: ${totalOldNewPairs} NEW→OLD pairs (interleaved)`);
+
+          for (let shift = 0; shift < allOldInfoInCurrentWave.length; shift++) {
+            for (let newIdx = 0; newIdx < allNewTargetsInCurrentWave.length; newIdx++) {
+              const { newSessionName } = allNewTargetsInCurrentWave[newIdx];
+              const oldTargetIdx = (newIdx + shift) % allOldInfoInCurrentWave.length;
+              const { oldChatId } = allOldInfoInCurrentWave[oldTargetIdx];
 
               taskTime = normalizeToWindow(taskTime);
               const dayOffset2 = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
-              const absoluteDay2 = dayOffset2;
 
               // NEW → OLD
               tasks.push({
@@ -808,7 +866,7 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
                 kind: 'script-next',
                 status: 'pending',
                 waveIndex,
-                dayIndex: absoluteDay2,
+                dayIndex: dayOffset2,
                 roundIndex,
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString(),

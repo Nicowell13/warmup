@@ -19,11 +19,38 @@ export function parseScript(scriptText: string): string[][] {
     .filter((seasonLines) => seasonLines.length > 0);
 }
 
-function matchesParity(lineIndex: number, parity: ScriptParity) {
+export function matchesParity(lineIndex: number, parity: ScriptParity) {
   if (parity === 'all') return true;
   const isEvenIndex = lineIndex % 2 === 0;
   // Index 0 dianggap "baris 1".
   return parity === 'odd' ? isEvenIndex : !isEvenIndex;
+}
+
+/**
+ * Generate a random starting line index that matches the given parity.
+ * Used for Interleaved Round-Robin to give each session unique starting points.
+ * @param scriptText - The script text to parse
+ * @param parity - 'odd' for OLD sessions, 'even' for NEW sessions  
+ * @returns Random line index matching the parity
+ */
+export function getRandomStartLine(scriptText: string, parity: ScriptParity): number {
+  const seasons = parseScript(scriptText);
+  if (seasons.length === 0 || parity === 'all') return 0;
+
+  // Get all valid line indices for this parity from first season
+  const firstSeason = seasons[0];
+  const validIndices: number[] = [];
+
+  for (let i = 0; i < firstSeason.length; i++) {
+    if (matchesParity(i, parity)) {
+      validIndices.push(i);
+    }
+  }
+
+  if (validIndices.length === 0) return 0;
+
+  // Pick a random valid index
+  return validIndices[Math.floor(Math.random() * validIndices.length)];
 }
 
 export function pickReplyFromScript(
