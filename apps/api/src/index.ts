@@ -516,42 +516,52 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         console.log(`   🎲 ${newSession.wahaSession} random start: line ${randomStart + 1} (parity: ${parity})`);
       }
 
-      // Campaign initial send: OLD sends first to each NEW target (using Interleaved pattern)
+      // Campaign initial send: OLD sends first to each NEW target (shuffled for natural pattern)
       const campaignResults: Array<{ chatId: string; fromSession: string; ok: boolean; error?: string }> = [];
 
-      // Interleaved initial send: OLD-1→NEW-1, OLD-2→NEW-2, OLD-3→NEW-3, OLD-1→NEW-2, ...
-      for (let shift = 0; shift < Math.ceil(orderedTargets.length / oldSessions.length); shift++) {
-        for (let oldIdx = 0; oldIdx < oldSessions.length; oldIdx++) {
-          const targetIdx = oldIdx + (shift * oldSessions.length);
-          if (targetIdx >= orderedTargets.length) continue;
+      // Build initial pairs and shuffle for random order
+      const initialPairs: Array<{ oldSession: typeof oldSessions[0]; chatId: string }> = [];
+      const targetsPerOld = Math.ceil(orderedTargets.length / oldSessions.length);
+      for (let i = 0; i < orderedTargets.length; i++) {
+        const oldIdx = Math.floor(i / targetsPerOld) % oldSessions.length;
+        initialPairs.push({
+          oldSession: oldSessions[oldIdx],
+          chatId: orderedTargets[i],
+        });
+      }
 
-          const chatId = orderedTargets[targetIdx];
-          const oldSession = oldSessions[oldIdx];
-          const oldSessionName = oldSession.wahaSession;
+      // Shuffle initial pairs for random order
+      for (let i = initialPairs.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [initialPairs[i], initialPairs[j]] = [initialPairs[j], initialPairs[i]];
+      }
 
-          try {
-            const parity = oldSession.scriptLineParity || 'odd';
-            const startLine = sessionRandomStartLines[oldSessionName] || 0;
-            const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, startLine, parity);
-            if (!picked) {
-              campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
-              continue;
-            }
+      // Send in shuffled order
+      for (const { oldSession, chatId } of initialPairs) {
+        const oldSessionName = oldSession.wahaSession;
 
-            await sendTextQueued({ session: oldSession.wahaSession, chatId: String(chatId), text: picked.text });
-            db.setChatProgress(oldSession.wahaSession, String(chatId), {
-              seasonIndex: picked.nextSeasonIndex,
-              lineIndex: picked.nextLineIndex,
-              messageCount: 1, // Initial count
-              lastOldIndex: oldIdx,
-              lastMessageAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
-
-            campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: true });
-          } catch (e: any) {
-            campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: e?.message || 'unknown' });
+        try {
+          const parity = oldSession.scriptLineParity || 'odd';
+          const startLine = sessionRandomStartLines[oldSessionName] || 0;
+          const picked = pickReplyFromScript(oldSession.autoReplyScriptText || '', 0, startLine, parity);
+          if (!picked) {
+            campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: 'Script kosong/tidak valid' });
+            continue;
           }
+
+          await sendTextQueued({ session: oldSession.wahaSession, chatId: String(chatId), text: picked.text });
+          db.setChatProgress(oldSession.wahaSession, String(chatId), {
+            seasonIndex: picked.nextSeasonIndex,
+            lineIndex: picked.nextLineIndex,
+            messageCount: 1, // Initial count
+            lastOldIndex: oldSessions.indexOf(oldSession),
+            lastMessageAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+
+          campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: true });
+        } catch (e: any) {
+          campaignResults.push({ chatId, fromSession: oldSession.wahaSession, ok: false, error: e?.message || 'unknown' });
         }
       }
 
