@@ -488,13 +488,13 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     status: 'starting',
     message: 'Campaign is starting. OLD blast will begin shortly, then wave tasks will be scheduled.',
     targets: orderedTargets.length,
-    waves: oldSessions.length,
+    waves: 1, // Single wave - all OLD talk to all NEW
   });
 
   // 6) Run campaign blast + wave generation in background
   (async () => {
     try {
-      console.log(`🚀 Starting campaign ${automationId}: ${orderedTargets.length} targets, ${oldSessions.length} waves`);
+      console.log(`🚀 Starting campaign ${automationId}: ${orderedTargets.length} targets, 1 wave (all-to-all)`);
 
       // Suppress NEW auto-replies while we blast from OLD and build scheduled tasks.
       // This prevents NEW webhook from firing immediately (spiky pattern / inconsistent pairing).
