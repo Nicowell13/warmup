@@ -6,6 +6,9 @@ services:
     environment:
       # Engine set to NOWEB for lower resource usage and better anti-detection
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
+      # NOWEB Store - required for read receipts (sendSeen) and typing indicators
+      - WAHA_NOWEB_STORE_ENABLED=True
+      - WAHA_NOWEB_STORE_FULL_SYNC=True
       - WAHA_LOG_LEVEL=info
       # If your WAHA requires API key (401 Unauthorized without it), set it here
       - WAHA_API_KEY=${WAHA_API_KEY}
