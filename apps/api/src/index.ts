@@ -777,19 +777,18 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         const waveDay0 = taskTime.startOf('day');
 
         for (let roundIndex = 0; roundIndex < MESSAGES_PER_WAVE; roundIndex++) {
-          // Collect all NEW targets for this wave
-          const allNewTargetsInCurrentWave: Array<{ newChatId: string; newSessionName: string }> = [];
-          const allOldInfoInCurrentWave: Array<{ oldSessionName: string; oldChatId: string }> = [];
+          // Build list of assigned pairs for this wave (respecting waveAssignment)
+          const assignedPairs: Array<{
+            oldSessionName: string;
+            oldChatId: string;
+            newChatId: string;
+            newSessionName: string;
+          }> = [];
 
           for (const oldSession of oldSessions) {
             const oldSessionName = oldSession.wahaSession;
             const oldChatId = oldSessionChatIds[oldSessionName];
             if (!oldChatId) continue;
-
-            // Add OLD info
-            if (!allOldInfoInCurrentWave.find(o => o.oldSessionName === oldSessionName)) {
-              allOldInfoInCurrentWave.push({ oldSessionName, oldChatId });
-            }
 
             const assignment = waveAssignment[oldSessionName];
             if (!assignment || assignment.newTargets.length === 0) continue;
@@ -802,24 +801,35 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
               if (!newSessionName) continue;
 
-              // Add NEW info if not already added
-              if (!allNewTargetsInCurrentWave.find(n => n.newChatId === newChatId)) {
-                allNewTargetsInCurrentWave.push({ newChatId, newSessionName });
-              }
+              assignedPairs.push({
+                oldSessionName,
+                oldChatId,
+                newChatId,
+                newSessionName,
+              });
             }
           }
 
           // === INTERLEAVED ROUND-ROBIN: OLD → NEW ===
-          // Pattern: OLD-1→NEW-1, OLD-2→NEW-2, OLD-3→NEW-3, OLD-1→NEW-2, OLD-2→NEW-3, OLD-3→NEW-1, ...
-          const totalOldNewPairs = allOldInfoInCurrentWave.length * allNewTargetsInCurrentWave.length;
-          console.log(`   📨 Round ${roundIndex + 1}: ${totalOldNewPairs} OLD→NEW pairs (interleaved)`);
+          // Pattern: OLD-1→NEW-1, OLD-2→NEW-3, OLD-3→NEW-5, then OLD-1→NEW-2, OLD-2→NEW-4, ...
+          // Sort pairs by OLD first, then interleave by picking one from each OLD in round-robin
+          const pairsByOld: Record<string, typeof assignedPairs> = {};
+          for (const pair of assignedPairs) {
+            if (!pairsByOld[pair.oldSessionName]) pairsByOld[pair.oldSessionName] = [];
+            pairsByOld[pair.oldSessionName].push(pair);
+          }
+          const oldNames = Object.keys(pairsByOld).sort();
+          const maxTargetsPerOld = Math.max(...oldNames.map(n => pairsByOld[n].length));
 
-          for (let shift = 0; shift < allNewTargetsInCurrentWave.length; shift++) {
-            for (let oldIdx = 0; oldIdx < allOldInfoInCurrentWave.length; oldIdx++) {
-              const { oldSessionName } = allOldInfoInCurrentWave[oldIdx];
-              const newTargetIdx = (oldIdx + shift) % allNewTargetsInCurrentWave.length;
-              const { newChatId } = allNewTargetsInCurrentWave[newTargetIdx];
+          console.log(`   📨 Round ${roundIndex + 1}: ${assignedPairs.length} OLD→NEW pairs (interleaved)`);
 
+          // Interleave: take 1st target from each OLD, then 2nd target from each OLD, etc.
+          for (let targetIdx = 0; targetIdx < maxTargetsPerOld; targetIdx++) {
+            for (const oldName of oldNames) {
+              const pairs = pairsByOld[oldName];
+              if (targetIdx >= pairs.length) continue;
+
+              const pair = pairs[targetIdx];
               taskTime = normalizeToWindow(taskTime);
               const dayOffset = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
 
@@ -828,8 +838,8 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
                 id: randomUUID(),
                 automationId,
                 dueAt: taskTime.toUTC().toISO()!,
-                chatId: newChatId,
-                senderSession: oldSessionName,
+                chatId: pair.newChatId,
+                senderSession: pair.oldSessionName,
                 kind: 'script-next',
                 status: 'pending',
                 waveIndex,
@@ -844,15 +854,24 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
           }
 
           // === INTERLEAVED ROUND-ROBIN: NEW → OLD ===
-          // Pattern: NEW-1→OLD-1, NEW-2→OLD-2, NEW-3→OLD-3, NEW-1→OLD-2, NEW-2→OLD-3, NEW-3→OLD-1, ...
-          console.log(`   📩 Round ${roundIndex + 1}: ${totalOldNewPairs} NEW→OLD pairs (interleaved)`);
+          // Sort pairs by NEW, then interleave by picking one from each NEW in round-robin
+          const pairsByNew: Record<string, typeof assignedPairs> = {};
+          for (const pair of assignedPairs) {
+            if (!pairsByNew[pair.newSessionName]) pairsByNew[pair.newSessionName] = [];
+            pairsByNew[pair.newSessionName].push(pair);
+          }
+          const newNames = Object.keys(pairsByNew).sort();
+          const maxTargetsPerNew = Math.max(...newNames.map(n => pairsByNew[n].length));
 
-          for (let shift = 0; shift < allOldInfoInCurrentWave.length; shift++) {
-            for (let newIdx = 0; newIdx < allNewTargetsInCurrentWave.length; newIdx++) {
-              const { newSessionName } = allNewTargetsInCurrentWave[newIdx];
-              const oldTargetIdx = (newIdx + shift) % allOldInfoInCurrentWave.length;
-              const { oldChatId } = allOldInfoInCurrentWave[oldTargetIdx];
+          console.log(`   📩 Round ${roundIndex + 1}: ${assignedPairs.length} NEW→OLD pairs (interleaved)`);
 
+          // Interleave: take 1st target from each NEW, then 2nd target from each NEW, etc.
+          for (let targetIdx = 0; targetIdx < maxTargetsPerNew; targetIdx++) {
+            for (const newName of newNames) {
+              const pairs = pairsByNew[newName];
+              if (targetIdx >= pairs.length) continue;
+
+              const pair = pairs[targetIdx];
               taskTime = normalizeToWindow(taskTime);
               const dayOffset2 = Math.max(0, Math.floor(taskTime.startOf('day').diff(waveDay0, 'days').days));
 
@@ -861,8 +880,8 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
                 id: randomUUID(),
                 automationId,
                 dueAt: taskTime.toUTC().toISO()!,
-                chatId: oldChatId,
-                senderSession: newSessionName,
+                chatId: pair.oldChatId,
+                senderSession: pair.newSessionName,
                 kind: 'script-next',
                 status: 'pending',
                 waveIndex,
