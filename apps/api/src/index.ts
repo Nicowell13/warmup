@@ -1520,6 +1520,124 @@ app.post('/groups/:id/retry', requireAuth, async (req, res) => {
   });
 });
 
+// Join ALL sessions to ALL groups at once
+app.post('/groups/join-all', requireAuth, async (_req, res) => {
+  const groups = db.listGroups();
+  const allNewSessions = db.getEligibleNewSessions();
+
+  if (groups.length === 0) {
+    return res.status(400).json({ error: 'Tidak ada group. Tambahkan group terlebih dahulu.' });
+  }
+  if (allNewSessions.length === 0) {
+    return res.status(400).json({ error: 'Tidak ada session NEW.' });
+  }
+
+  // Create pending join records for all combinations
+  const allJoinRecords: Array<{ id: string; groupId: string; groupName: string; inviteCode: string; sessionName: string }> = [];
+
+  for (const group of groups) {
+    for (const session of allNewSessions) {
+      // Check if already joined
+      if (db.hasSessionJoinedGroup(group.id, session.sessionName)) {
+        continue;
+      }
+
+      const joinId = randomUUID();
+      db.upsertGroupJoin({
+        id: joinId,
+        groupId: group.id,
+        sessionName: session.sessionName,
+        chatId: session.chatId,
+        status: 'pending',
+        retryCount: 0,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      allJoinRecords.push({
+        id: joinId,
+        groupId: group.id,
+        groupName: group.name,
+        inviteCode: group.inviteCode,
+        sessionName: session.sessionName,
+      });
+    }
+  }
+
+  if (allJoinRecords.length === 0) {
+    return res.json({ ok: true, message: 'Semua session sudah join ke semua group', queued: 0 });
+  }
+
+  // Process all joins in background
+  (async () => {
+    console.log(`🔗 Starting JOIN ALL: ${allJoinRecords.length} joins (${allNewSessions.length} sessions × ${groups.length} groups)`);
+
+    for (let i = 0; i < allJoinRecords.length; i++) {
+      const record = allJoinRecords[i];
+      const join = db.getGroupJoinById(record.id);
+      if (!join) continue;
+
+      db.upsertGroupJoin({ ...join, status: 'joining' });
+      console.log(`  [${i + 1}/${allJoinRecords.length}] ${record.sessionName} → ${record.groupName}`);
+
+      let success = false;
+      let lastError = '';
+      let retryCount = 0;
+
+      while (!success && retryCount < 3) {
+        const result = await wahaJoinGroup(record.sessionName, record.inviteCode);
+
+        if (result.ok) {
+          success = true;
+          db.upsertGroupJoin({
+            ...join,
+            status: 'joined',
+            retryCount,
+            joinedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+          console.log(`    ✅ Joined`);
+        } else {
+          retryCount++;
+          lastError = result.error || 'Unknown error';
+          console.log(`    ❌ Attempt ${retryCount}/3: ${lastError}`);
+
+          if (retryCount < 3) {
+            const retryDelay = 10000 + Math.random() * 5000;
+            await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          }
+        }
+      }
+
+      if (!success) {
+        db.upsertGroupJoin({
+          ...join,
+          status: 'failed',
+          retryCount,
+          errorMessage: lastError,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      // Delay 10-15s before next
+      if (i < allJoinRecords.length - 1) {
+        const delay = 10000 + Math.random() * 5000;
+        console.log(`    ⏳ Wait ${Math.round(delay / 1000)}s...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+
+    console.log(`🔗 JOIN ALL completed`);
+  })();
+
+  return res.json({
+    ok: true,
+    message: `Join All dimulai: ${allJoinRecords.length} joins (${allNewSessions.length} sessions × ${groups.length} groups)`,
+    queued: allJoinRecords.length,
+    totalSessions: allNewSessions.length,
+    totalGroups: groups.length,
+  });
+});
+
 // Webhook endpoint for WAHA.
 // Configure WAHA to call: http://<api-host>:4000/waha/webhook
 // The payload shape depends on WAHA version; we handle a few common fields.

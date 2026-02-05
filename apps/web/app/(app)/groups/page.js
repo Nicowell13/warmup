@@ -196,13 +196,37 @@ export default function GroupsPage() {
         }
     }
 
+    // Join All - join all sessions to all groups
+    const [joiningAll, setJoiningAll] = useState(false);
+    async function handleJoinAll() {
+        if (!confirm('Join semua session NEW ke semua group?')) return;
+        setJoiningAll(true);
+        setError('');
+        try {
+            const data = await apiFetch('/groups/join-all', { token: getToken(), method: 'POST' });
+            alert(data.message);
+            await loadGroups();
+        } catch (e) {
+            setError(e?.message || 'Gagal join all');
+        } finally {
+            setJoiningAll(false);
+        }
+    }
+
     return (
         <div className="space-y-6">
             <div className="rounded-2xl border bg-white p-5">
-                <h1 className="text-xl font-semibold">Groups</h1>
-                <p className="mt-1 text-sm text-gray-600">
-                    Masukkan nomor NEW ke WhatsApp group via invitation link.
-                </p>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h1 className="text-xl font-semibold">Groups</h1>
+                        <p className="mt-1 text-sm text-gray-600">
+                            Masukkan nomor NEW ke WhatsApp group via invitation link.
+                        </p>
+                    </div>
+                    <Button onClick={handleJoinAll} disabled={joiningAll || groups.length === 0}>
+                        {joiningAll ? 'Joining...' : '🚀 Join All'}
+                    </Button>
+                </div>
             </div>
 
             {error ? (
