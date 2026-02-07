@@ -204,7 +204,7 @@ export async function wahaStopTyping(session: string, chatId: string) {
 }
 
 // Docs: POST /api/{session}/groups/join - Join group using invite code
-export async function wahaJoinGroup(session: string, inviteCode: string): Promise<{ ok: boolean; error?: string; groupId?: string }> {
+export async function wahaJoinGroup(session: string, inviteCode: string): Promise<{ ok: boolean; error?: string; groupId?: string; alreadyMember?: boolean }> {
   try {
     const data: any = await wahaRequestJson(`/api/${encodeURIComponent(session)}/groups/join`, {
       method: 'POST',
@@ -215,6 +215,11 @@ export async function wahaJoinGroup(session: string, inviteCode: string): Promis
     });
     return { ok: true, groupId: data?.id || data?.groupId };
   } catch (err: any) {
-    return { ok: false, error: err?.message || 'Unknown error' };
+    const errMsg = String(err?.message || '');
+    // 409 conflict means already a member of the group
+    if (errMsg.includes('409') || errMsg.includes('conflict')) {
+      return { ok: true, alreadyMember: true };
+    }
+    return { ok: false, error: errMsg || 'Unknown error' };
   }
 }
