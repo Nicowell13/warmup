@@ -1492,6 +1492,8 @@ app.post('/groups/join-all', requireAuth, async (_req, res) => {
 app.post('/waha/webhook', async (req, res) => {
   try {
     const body = req.body as any;
+    console.log(`📡 [Webhook] Hit! Body keys: ${Object.keys(body || {}).join(',')}`);
+    if (body.session) console.log(`   Session: ${body.session}`);
 
     const WEBHOOK_DEBUG = String(process.env.WEBHOOK_DEBUG || '').trim() === '1';
     const debug = (...args: any[]) => {
