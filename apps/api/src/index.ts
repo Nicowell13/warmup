@@ -149,7 +149,15 @@ app.get('/waha/sessions/status', requireAuth, async (_req, res) => {
 
 app.post('/waha/sessions/:session/start', requireAuth, async (req, res) => {
   try {
-    const data = await wahaStartSession(String(req.params.session));
+    const config = {
+      noweb: {
+        store: {
+          enabled: true,
+          full_sync: true,
+        },
+      },
+    };
+    const data = await wahaStartSession(String(req.params.session), config);
     return res.json({ ok: true, data });
   } catch (e: any) {
     return res.status(502).json({ error: e?.message || 'WAHA error' });
