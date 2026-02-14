@@ -266,6 +266,11 @@ function ensureWa12PresetSessions() {
   ];
 
   for (const item of items) {
+    const sessionScript =
+      WA12_PRESET.scripts && WA12_PRESET.scripts[item.name]
+        ? WA12_PRESET.scripts[item.name]
+        : WA12_PRESET.scriptText;
+
     const existing = db.getSessionByName(item.name);
     if (existing) {
       const updated = db.upsertSession({
@@ -274,7 +279,7 @@ function ensureWa12PresetSessions() {
         autoReplyEnabled: true,
         autoReplyMode: 'script',
         scriptLineParity: item.cluster === 'new' ? WA12_PRESET.newScriptLineParity : WA12_PRESET.oldScriptLineParity,
-        autoReplyScriptText: WA12_PRESET.scriptText,
+        autoReplyScriptText: sessionScript,
         // keep existing autoReplyText as-is
       });
       updatedCount += 1;
@@ -290,7 +295,7 @@ function ensureWa12PresetSessions() {
       autoReplyMode: 'script',
       scriptLineParity: item.cluster === 'new' ? WA12_PRESET.newScriptLineParity : WA12_PRESET.oldScriptLineParity,
       autoReplyText: 'Terima kasih, pesan Anda sudah kami terima.',
-      autoReplyScriptText: WA12_PRESET.scriptText,
+      autoReplyScriptText: sessionScript,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
@@ -496,9 +501,10 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
     try {
       console.log(`🚀 Starting campaign ${automationId}: ${orderedTargets.length} targets, 1 wave (all-to-all)`);
 
-      // Suppress NEW auto-replies while we blast from OLD and build scheduled tasks.
-      // This prevents NEW webhook from firing immediately (spiky pattern / inconsistent pairing).
-      db.setSuppressNewAutoReplyUntil(DateTime.now().plus({ days: 7 }).toUTC().toISO()!);
+      // Suppress NEW auto-replies? NO.
+      // We want NEW sessions to reply IMMEDIATELY via webhook (Reactive Worker).
+      // So we do NOT suppress auto-replies.
+      db.setSuppressNewAutoReplyUntil(null);
 
       // Generate random start lines for each session (Interleaved Round-Robin feature)
       // OLD sessions use odd parity, NEW sessions use even parity
@@ -638,7 +644,9 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       console.log(`🔗 Total pairs: ${allPairs.length} (${oldSessions.length} OLD × ${orderedTargets.length} NEW)`);
 
       // Calculate pacing
-      const totalTasksCampaign = allPairs.length * MESSAGES_PER_WAVE * 2; // OLD+NEW per round
+      // Re-calculated: We only schedule OLD -> NEW tasks. NEW -> OLD is via Webhook (Reactive).
+      // So tasks count is halved relative to total interactions.
+      const totalTasksCampaign = allPairs.length * MESSAGES_PER_WAVE; // Only OLD -> NEW scheduled
       const totalWindowSecondsCampaign = Math.max(1, TOTAL_WINDOWS * windowMinutesPerDay * 60);
       const delayBetweenTasksSeconds = Math.max(
         1,
@@ -669,8 +677,8 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       let taskTime = normalizeToWindow(now.plus({ seconds: initialDelaySeconds }));
       const day0 = taskTime.startOf('day');
 
-      console.log(`\n🌊 === SINGLE WAVE (ALL-TO-ALL, RANDOM ORDER) ===`);
-      console.log(`   📊 ${allPairs.length} pairs × ${MESSAGES_PER_WAVE} rounds × 2 directions = ${totalTasksCampaign} tasks`);
+      console.log(`\n🌊 === SINGLE WAVE (ALL-TO-ALL, RANDOM ORDER, REACTIVE NEW) ===`);
+      console.log(`   📊 ${allPairs.length} pairs × ${MESSAGES_PER_WAVE} rounds × 1 direction (OLD->NEW) = ${totalTasksCampaign} tasks`);
 
       for (let roundIndex = 0; roundIndex < MESSAGES_PER_WAVE; roundIndex++) {
         // Shuffle pairs for random order each round
@@ -698,33 +706,13 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
             updatedAt: new Date().toISOString(),
           });
 
+          // Delay includes time for the NEW reply (webhook) to happen naturally
+          // We assume webhook reply happens "instantly" after OLD message is received.
+          // Spacing is mainly for OLD not to blast too fast.
           taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
         }
 
-        console.log(`   📩 Round ${roundIndex + 1}: ${shuffledPairs.length} NEW→OLD pairs (same order)`);
-
-        // NEW → OLD (same shuffled order, so replies match)
-        for (const pair of shuffledPairs) {
-          taskTime = normalizeToWindow(taskTime);
-          const dayOffset2 = Math.max(0, Math.floor(taskTime.startOf('day').diff(day0, 'days').days));
-
-          tasks.push({
-            id: randomUUID(),
-            automationId,
-            dueAt: taskTime.toUTC().toISO()!,
-            chatId: pair.oldChatId,
-            senderSession: pair.newSessionName,
-            kind: 'script-next',
-            status: 'pending',
-            waveIndex: 0,
-            dayIndex: dayOffset2,
-            roundIndex,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          });
-
-          taskTime = taskTime.plus({ seconds: delayBetweenTasksSeconds });
-        }
+        // REMOVED: NEW → OLD loop. This is now handled by Webhook.
       }
 
       console.log(`   ✅ Campaign complete: ${tasks.length} total tasks scheduled`);
@@ -1632,8 +1620,33 @@ app.post('/waha/webhook', async (req, res) => {
       }
 
       const parity = config.scriptLineParity || 'odd';
+
+      // Dynamic Script Logic for NEW sessions:
+      // If this is a NEW session, it should reply using the script of the OLD session it's talking to.
+      let scriptContent = config.autoReplyScriptText || '';
+
+      if ((config.cluster || 'old') === 'new') {
+        // Try to find the session definition of the sender (the OLD session)
+        // We can look it up by wahaSession name if we extracted it earlier
+        // Re-fetch map since we are in a different scope
+        const map = await getSessionToChatIdMapCached();
+        const chatIdToSession: Record<string, string> = {};
+        for (const [name, cid] of Object.entries(map)) {
+          if (cid) chatIdToSession[String(cid)] = String(name);
+        }
+
+        const inboundSessionName = chatIdToSession[String(chatId)];
+        if (inboundSessionName) {
+          const senderSession = db.getSessionByName(inboundSessionName);
+          if (senderSession?.autoReplyScriptText) {
+            scriptContent = senderSession.autoReplyScriptText;
+            debug('using_sender_script', { session, chatId, sender: inboundSessionName });
+          }
+        }
+      }
+
       const picked = pickReplyFromScript(
-        config.autoReplyScriptText || '',
+        scriptContent,
         progress.seasonIndex,
         progress.lineIndex,
         parity
