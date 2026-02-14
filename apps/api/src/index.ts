@@ -7,7 +7,7 @@ import { DateTime } from 'luxon';
 
 import { db } from './db.js';
 import { requireAuth, signToken, verifyAdminPassword } from './auth.js';
-import { wahaDeleteSession, wahaGetQrBase64, wahaJoinGroup, wahaListSessions, wahaRequestPairingCode, wahaStartSession } from './waha.js';
+import { wahaDeleteSession, wahaGetQrBase64, wahaJoinGroup, wahaListSessions, wahaRequestPairingCode, wahaStartSession, wahaSendText } from './waha.js';
 import { pickRandom, pickReplyFromScript, getRandomStartLine } from './script.js';
 import { startScheduler } from './scheduler.js';
 import { WA12_PRESET } from './presets/wa12Preset.js';
@@ -1662,7 +1662,27 @@ app.post('/waha/webhook', async (req, res) => {
         return res.status(200).json({ ok: true, ignored: true });
       }
 
-      await sendTextQueued({ session: config.wahaSession, chatId: String(chatId), text: picked.text });
+      if ((config.cluster || 'old') === 'new') {
+        const delayMs = 15000 + Math.floor(Math.random() * 20000); // 15-35s
+        console.log(`⏳ [Reactive] ${config.wahaSession} waiting ${Math.round(delayMs / 1000)}s before replying to ${chatId}...`);
+
+        // Wait non-blocking
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+
+        try {
+          // Direct send, bypassing shared worker queue
+          await wahaSendText({
+            session: config.wahaSession,
+            chatId: String(chatId),
+            text: picked.text,
+          });
+          console.log(`🚀 [Reactive] ${config.wahaSession} sent reply to ${chatId}`);
+        } catch (err: any) {
+          console.error(`❌ [Reactive] Failed to send reply from ${config.wahaSession}:`, err.message);
+        }
+      } else {
+        await sendTextQueued({ session: config.wahaSession, chatId: String(chatId), text: picked.text });
+      }
 
       // Update progress dengan message count increment (incoming + outgoing = +2)
       const newMessageCount = (progress.messageCount || 0) + 2; // +1 untuk incoming, +1 untuk outgoing
