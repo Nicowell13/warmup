@@ -1,21 +1,33 @@
+version: "3.8"
+
 services:
   waha:
     image: devlikeapro/waha-plus:latest
     container_name: waha
     restart: unless-stopped
     environment:
-      # Engine set to NOWEB for lower resource usage and better anti-detection
+      # Engine
       - WHATSAPP_DEFAULT_ENGINE=NOWEB
-      # Enable NOWEB store for read receipts and seen status
-      - WHATSAPP_NOWEB_STORE_ENABLED=True
-      - WHATSAPP_NOWEB_STORE_FULL_SYNC=True
+
+      # ✅ WAHA NOWEB STORE (WAJIB untuk reactive & sendSeen)
+      - WAHA_NOWEB_STORE_ENABLED=true
+      - WAHA_NOWEB_STORE_FULL_SYNC=true
+
+      # Logging
       - WAHA_LOG_LEVEL=info
-      # If your WAHA requires API key (401 Unauthorized without it), set it here
+
+      # API Key (jika digunakan)
       - WAHA_API_KEY=${WAHA_API_KEY}
-      # Webhook destination (API will expose /waha/webhook/:sessionName)
+
+      # Webhook ke API container
       - WAHA_WEBHOOK_URL=http://api:4000/waha/webhook
+
     ports:
-      - "3001:3000" # WAHA UI/API (host:container)
+      - "3001:3000"
+
+    volumes:
+      - waha-sessions:/app/.sessions
+
 
   api:
     build:
@@ -29,7 +41,6 @@ services:
       - PORT=4000
       - DATABASE_URL=file:/data/app.db
       - WAHA_BASE_URL=http://waha:3000
-      # Must match WAHA service key if enabled
       - WAHA_API_KEY=${WAHA_API_KEY}
     volumes:
       - api-data:/data
@@ -37,6 +48,7 @@ services:
       - "4001:4000"
     depends_on:
       - waha
+
 
   web:
     build:
@@ -55,5 +67,7 @@ services:
     depends_on:
       - api
 
+
 volumes:
   api-data:
+  waha-sessions:

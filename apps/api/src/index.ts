@@ -1578,6 +1578,8 @@ app.post('/waha/webhook', async (req, res) => {
         }
       }
 
+      console.log(`📥 [Webhook] ${session} received message from ${chatId} (Cluster: ${config.cluster})`);
+
       const map = await getSessionToChatIdMapCached();
       const chatIdToSession: Record<string, string> = {};
       for (const [name, cid] of Object.entries(map)) {
@@ -1587,9 +1589,12 @@ app.post('/waha/webhook', async (req, res) => {
       const inboundSessionName = chatIdToSession[String(chatId)] || '';
       const inboundIsOld = /^old-(\d+)$/i.test(inboundSessionName);
 
+      console.log(`   🔍 Sender: ${chatId} -> Session: "${inboundSessionName}" (IsOld: ${inboundIsOld})`);
+
       // NEW sessions should only participate in conversations with OLD sessions.
       // This prevents NEW auto-replying to other NEW sessions / external chats.
       if (!inboundIsOld) {
+        console.log(`   ⛔ Ignored: Sender is not a known OLD session.`);
         debug('ignored:new_inbound_not_old', { session, chatId, inboundSessionName });
         return res.status(200).json({ ok: true, ignored: true });
       }
@@ -1599,10 +1604,17 @@ app.post('/waha/webhook', async (req, res) => {
       if (!existingPair) {
         db.setNewPairedOldChatId(config.wahaSession, String(chatId));
         debug('paired:new_first_contact', { session, chatId, inboundSessionName });
+        console.log(`   🤝 Paired ${config.wahaSession} with ${inboundSessionName} (${chatId})`);
       } else if (String(chatId) !== String(existingPair)) {
+        console.log(`   ⛔ Ignored: Paired with different OLD session (${existingPair}).`);
         debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
         return res.status(200).json({ ok: true, ignored: true });
       }
+    }
+
+    // Check if message content exists (decryption check)
+    if (!config.autoReplyScriptText) {
+      // This is just a check, logic continues below
     }
 
     const mode = config.autoReplyMode || 'static';
