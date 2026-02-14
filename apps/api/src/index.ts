@@ -153,7 +153,7 @@ app.post('/waha/sessions/:session/start', requireAuth, async (req, res) => {
       noweb: {
         store: {
           enabled: true,
-          full_sync: true,
+          fullSync: true,
         },
       },
     };
