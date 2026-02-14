@@ -20,7 +20,7 @@ services:
       - WAHA_API_KEY=${WAHA_API_KEY}
 
       # Webhook ke API container
-      - WAHA_WEBHOOK_URL=http://api:4000/waha/webhook
+      - WAHA_WEBHOOK_URL=http://app-api:4000/waha/webhook
 
     ports:
       - "3001:3000"
