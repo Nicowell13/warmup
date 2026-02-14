@@ -299,8 +299,24 @@ function ensureWa12PresetSessions() {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     });
+
     createdCount += 1;
     upserted.push(created);
+
+    // Auto-start session with NOWEB store enabled
+    const nowebConfig = {
+      noweb: {
+        store: {
+          enabled: true,
+          full_sync: true,
+        },
+      },
+    };
+
+    // Fire and forget start
+    wahaStartSession(item.name, nowebConfig)
+      .then(() => console.log(`   ✅ Started WAHA session: ${item.name} (NOWEB store enabled)`))
+      .catch((err: any) => console.error(`   ❌ Failed to start WAHA session ${item.name}:`, err.message));
   }
 
   return { upserted, createdCount, updatedCount };

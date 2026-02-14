@@ -45,7 +45,7 @@ async function wahaRequestJson(path: string, init: RequestInit = {}) {
   return res.json().catch(() => ({}));
 }
 
-async function wahaCreateSession(name: string, start = true) {
+async function wahaCreateSession(name: string, start = true, config?: any) {
   // Docs: POST /api/sessions
   // By default, WAHA starts right after creation; we can also set { start: false }.
   return wahaRequestJson('/api/sessions', {
@@ -54,7 +54,7 @@ async function wahaCreateSession(name: string, start = true) {
       'Content-Type': 'application/json',
       Accept: 'application/json',
     },
-    body: JSON.stringify({ name, start }),
+    body: JSON.stringify({ name, start, config }),
   });
 }
 
@@ -118,12 +118,14 @@ export async function wahaRequestPairingCode(session: string, phoneNumber: strin
 }
 
 // Docs: POST /api/sessions/{session}/start
-export async function wahaStartSession(session: string) {
+// Added config support to pass NOWEB store settings
+export async function wahaStartSession(session: string, config?: any) {
   // New WAHA API requires you to create session first.
 
   // Prefer granular API: create (no start) -> start
   try {
-    await wahaCreateSession(session, false);
+    // Pass config here during creation
+    await wahaCreateSession(session, false, config);
   } catch (e: any) {
     const msg = String(e?.message || '');
     const alreadyExists = msg.includes('409') || msg.toLowerCase().includes('already exists');
