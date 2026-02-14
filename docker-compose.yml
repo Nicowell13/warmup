@@ -21,6 +21,7 @@ services:
 
       # Webhook ke API container
       - WAHA_WEBHOOK_URL=http://app-api:4000/waha/webhook
+      - WAHA_WEBHOOK_EVENTS=message,message.any,session.status,message.ack
 
     ports:
       - "3001:3000"
