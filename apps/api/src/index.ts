@@ -1612,11 +1612,13 @@ app.post('/waha/webhook', async (req, res) => {
 
       // NEW sessions should only participate in conversations with OLD sessions.
       // This prevents NEW auto-replying to other NEW sessions / external chats.
-      if (!inboundIsOld) {
-        console.log(`   ⛔ Ignored: Sender is not a known OLD session.`);
-        debug('ignored:new_inbound_not_old', { session, chatId, inboundSessionName });
-        return res.status(200).json({ ok: true, ignored: true });
-      }
+
+      // DISABLED VALIDATION TEMPORARILY
+      // if (!inboundIsOld) {
+      //   console.log(`   ⛔ Ignored: Sender is not a known OLD session.`);
+      //   debug('ignored:new_inbound_not_old', { session, chatId, inboundSessionName });
+      //   return res.status(200).json({ ok: true, ignored: true });
+      // }
 
       // Only enforce pairing when talking to known OLD sessions.
       const existingPair = db.getNewPairedOldChatId(config.wahaSession);
