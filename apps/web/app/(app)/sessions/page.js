@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, getApiBaseUrl } from '../../../lib/api';
@@ -20,6 +20,7 @@ export default function SessionsPage() {
   const [maxSessions, setMaxSessions] = useState(15);
 
   const [initBusy, setInitBusy] = useState(false);
+  const [initSuccess, setInitSuccess] = useState('');
   const [statusMap, setStatusMap] = useState({});
 
   const canCreateMore = sessions.length < maxSessions;
@@ -337,12 +338,19 @@ export default function SessionsPage() {
   async function initWa12Preset() {
     setInitBusy(true);
     setError('');
+    setInitSuccess('');
     try {
-      await apiFetch('/presets/wa12/init', { token, method: 'POST' });
+      const data = await apiFetch('/presets/wa12/init', { token, method: 'POST' });
       await loadSessions(token);
       await loadWahaStatus(token);
+      const created = data?.createdCount ?? 0;
+      const updated = data?.updatedCount ?? 0;
+      setInitSuccess(
+        `Preset WA12 diterapkan. ${created > 0 ? `${created} session baru dibuat. ` : ''}${updated > 0 ? `${updated} session di-update (script per OLD).` : 'Script per OLD sudah sinkron.'}`
+      );
+      setTimeout(() => setInitSuccess(''), 8000);
     } catch (e) {
-      setError(e?.message || 'Gagal init preset');
+      setError(e?.message || 'Gagal sync preset');
     } finally {
       setInitBusy(false);
     }
@@ -357,13 +365,18 @@ export default function SessionsPage() {
             <p className="mt-1 text-sm text-gray-600">Kelola banyak nomor/session dan konfigurasi auto-reply.</p>
           </div>
           <div className="flex flex-col items-start gap-3 sm:items-end">
-            <button
-              disabled={initBusy}
-              onClick={initWa12Preset}
-              className="rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {initBusy ? 'Menyiapkan...' : 'Init WA12 (5 old, 10 new)'}
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              <button
+                disabled={initBusy}
+                onClick={initWa12Preset}
+                className="rounded-lg border border-emerald-600 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {initBusy ? 'Menyiapkan...' : 'Sync / Apply WA12 preset'}
+              </button>
+              <p className="text-xs text-gray-500 text-right max-w-[220px]">
+                Buat/update 5 OLD + 10 NEW dan script per OLD (topik beda). Jalankan setelah ubah preset.
+              </p>
+            </div>
 
             <button
               disabled={!canCreateMore}
@@ -381,6 +394,10 @@ export default function SessionsPage() {
 
       {error ? (
         <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+      ) : null}
+
+      {initSuccess ? (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{initSuccess}</div>
       ) : null}
 
       <section className="rounded-2xl border bg-white p-5">

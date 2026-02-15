@@ -147,6 +147,16 @@ app.get('/waha/sessions/status', requireAuth, async (_req, res) => {
 // - Pairing code: POST /api/{session}/auth/request-code { phoneNumber }
 // - Start session: POST /api/sessions/{session}/start
 
+// Normalisasi nama session ke format preset (old-1, new-2) agar lookup script OLD konsisten.
+function normalizePresetSessionName(name: string): string {
+  if (!name || !name.trim()) return name;
+  const m = name.trim().match(/^old[-_]?(\d+)$/i);
+  if (m) return `old-${m[1]}`;
+  const m2 = name.trim().match(/^new[-_]?(\d+)$/i);
+  if (m2) return `new-${m2[1]}`;
+  return name;
+}
+
 // Webhook URL untuk WAHA: harus reachable dari container/process WAHA (e.g. http://app-api:4000/waha/webhook).
 // Set di env agar setiap session (termasuk NEW) dapat kirim event message ke API.
 const WAHA_WEBHOOK_URL = process.env.WAHA_WEBHOOK_URL || 'http://localhost:4000/waha/webhook';
@@ -1674,9 +1684,7 @@ app.post('/waha/webhook', async (req, res) => {
       let scriptContent = config.autoReplyScriptText || '';
 
       if ((config.cluster || 'old') === 'new') {
-        // Try to find the session definition of the sender (the OLD session)
-        // We can look it up by wahaSession name if we extracted it earlier
-        // Re-fetch map since we are in a different scope
+        // NEW membalas pakai script OLD yang mengirim (topik per-OLD dari preset).
         const map = await getSessionToChatIdMapCached();
         const chatIdToSession: Record<string, string> = {};
         for (const [name, cid] of Object.entries(map)) {
@@ -1684,12 +1692,17 @@ app.post('/waha/webhook', async (req, res) => {
         }
 
         const inboundSessionName = chatIdToSession[String(chatId)];
-        if (inboundSessionName) {
-          const senderSession = db.getSessionByName(inboundSessionName);
-          if (senderSession?.autoReplyScriptText) {
-            scriptContent = senderSession.autoReplyScriptText;
-            debug('using_sender_script', { session, chatId, sender: inboundSessionName });
-          }
+        const lookupName = inboundSessionName ? normalizePresetSessionName(inboundSessionName) : '';
+        const senderSession =
+          (inboundSessionName ? db.getSessionByName(inboundSessionName) : undefined) ||
+          (lookupName ? db.getSessionByName(lookupName) : undefined);
+
+        if (senderSession?.autoReplyScriptText) {
+          scriptContent = senderSession.autoReplyScriptText;
+          console.log(`   📜 [Script] NEW pakai script OLD: "${lookupName || inboundSessionName}" (topik beda per OLD)`);
+          debug('using_sender_script', { session, chatId, sender: lookupName || inboundSessionName });
+        } else {
+          console.log(`   ⚠️ [Script] Fallback ke script NEW (sender tidak ditemukan atau tanpa script: "${inboundSessionName || '?'}")`);
         }
       }
 
