@@ -1606,19 +1606,20 @@ app.post('/waha/webhook', async (req, res) => {
       }
 
       const inboundSessionName = chatIdToSession[String(chatId)] || '';
-      const inboundIsOld = /^old-(\d+)$/i.test(inboundSessionName);
+      // Accept old-1, old1, old_1, OLD-2, etc. (jangan hanya old-\d+ supaya pairing "new2 → old-1" tetap jalan)
+      const inboundIsOld = !!(inboundSessionName && /^old[-_]?\d+$/i.test(inboundSessionName));
 
+      console.log('MAP:', chatIdToSession);
+      console.log('INBOUND:', inboundSessionName);
       console.log(`   🔍 Sender: ${chatId} -> Session: "${inboundSessionName}" (IsOld: ${inboundIsOld})`);
 
       // NEW sessions should only participate in conversations with OLD sessions.
-      // This prevents NEW auto-replying to other NEW sessions / external chats.
-
-      // DISABLED VALIDATION TEMPORARILY
-      // if (!inboundIsOld) {
-      //   console.log(`   ⛔ Ignored: Sender is not a known OLD session.`);
-      //   debug('ignored:new_inbound_not_old', { session, chatId, inboundSessionName });
-      //   return res.status(200).json({ ok: true, ignored: true });
-      // }
+      // Block only if: no mapping for this chatId, or mapped session is not an OLD-style name.
+      if (!inboundSessionName || !/^old[-_]?\d+$/i.test(inboundSessionName)) {
+        console.log(`   ⛔ Ignored: Sender is not a known OLD session (map empty or name not old-style).`);
+        debug('ignored:new_inbound_not_old', { session, chatId, inboundSessionName });
+        return res.status(200).json({ ok: true, ignored: true });
+      }
 
       // Only enforce pairing when talking to known OLD sessions.
       const existingPair = db.getNewPairedOldChatId(config.wahaSession);
