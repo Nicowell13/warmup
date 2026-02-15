@@ -754,17 +754,10 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
 
       db.replaceScheduledTasksForAutomation(automationId, tasks);
 
-      // Keep NEW webhook suppressed until the last scheduled task is done (+1 hour)
-      let maxDueAt: string | null = null;
-      for (const t of tasks) {
-        if (!maxDueAt || String(t.dueAt) > maxDueAt) maxDueAt = String(t.dueAt);
-      }
-      if (maxDueAt) {
-        const until = DateTime.fromISO(maxDueAt, { zone: 'utc' }).plus({ hours: 1 }).toUTC().toISO()!;
-        db.setSuppressNewAutoReplyUntil(until);
-      } else {
-        db.setSuppressNewAutoReplyUntil(null);
-      }
+      // Suppress NEW auto-replies? NO.
+      // We want NEW sessions to reply IMMEDIATELY via webhook (Reactive Worker).
+      // So we do NOT suppress auto-replies.
+      db.setSuppressNewAutoReplyUntil(null);
 
       console.log(`🎉 Campaign ${automationId} fully initialized: ${tasks.length} wave tasks scheduled`);
     } catch (error: any) {
