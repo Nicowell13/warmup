@@ -133,11 +133,15 @@ export async function wahaStartSession(session: string, config?: any) {
   }
 
   try {
+    const startBody: { config?: any } = {};
+    if (config && Object.keys(config).length) startBody.config = config;
     return await wahaRequestJson(`/api/sessions/${encodeURIComponent(session)}/start`, {
       method: 'POST',
       headers: {
+        'Content-Type': 'application/json',
         Accept: 'application/json',
       },
+      body: Object.keys(startBody).length ? JSON.stringify(startBody) : undefined,
     });
   } catch (e: any) {
     const msg = String(e?.message || '');

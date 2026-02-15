@@ -54,6 +54,15 @@ Set WAHA agar memanggil webhook API:
 
 Aplikasi akan auto-reply **berdasarkan nama session** yang datang di payload webhook.
 
+- **Docker:** Di `docker-compose.yml`, service `waha` punya `WAHA_WEBHOOK_URL` dan service `api` punya `WAHA_WEBHOOK_URL` agar saat session di-start, webhook ikut didaftarkan per-session (WAHA Plus).
+- **Tanpa Docker:** Set env `WAHA_WEBHOOK_URL=http://<host-reachable-by-waha>:4000/waha/webhook` saat jalankan API (atau pakai default `http://localhost:4000/waha/webhook` jika WAHA dan API di mesin yang sama).
+
+### Troubleshooting: "Tidak ada webhook masuk" / NEW tidak auto-reply
+1. **Cek log API** – Saat ada pesan masuk ke session mana pun, harus muncul log: `📡 [Webhook] Hit!` di log **API**, bukan hanya log WAHA. Kalau tidak ada, webhook tidak sampai ke API.
+2. **Session harus di-start dengan webhook** – Setiap session (termasuk NEW) perlu di-start dengan config yang berisi webhook. Session yang dibuat sebelum penambahan fitur ini perlu **di-stop lalu di-start lagi** dari dashboard (atau sync sessions) agar webhook terdaftar.
+3. **Reachable dari WAHA** – URL webhook harus bisa diakses dari proses/container WAHA. Di Docker pakai `http://app-api:4000/waha/webhook` (bukan localhost).
+4. **Env di API** – Pastikan `WAHA_WEBHOOK_URL` diset di environment service API (lihat `docker-compose.yml`) agar saat start session, API mengirim URL ini ke WAHA.
+
 ## Jalankan via Docker
 - `docker compose up --build`
 

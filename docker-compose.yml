@@ -43,6 +43,8 @@ services:
       - DATABASE_URL=file:/data/app.db
       - WAHA_BASE_URL=http://waha:3000
       - WAHA_API_KEY=${WAHA_API_KEY}
+      # URL webhook yang WAHA panggil saat ada pesan masuk; dipakai saat start session (per-session webhook).
+      - WAHA_WEBHOOK_URL=http://app-api:4000/waha/webhook
     volumes:
       - api-data:/data
     ports:

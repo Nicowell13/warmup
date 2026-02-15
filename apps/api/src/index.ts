@@ -147,16 +147,28 @@ app.get('/waha/sessions/status', requireAuth, async (_req, res) => {
 // - Pairing code: POST /api/{session}/auth/request-code { phoneNumber }
 // - Start session: POST /api/sessions/{session}/start
 
+// Webhook URL untuk WAHA: harus reachable dari container/process WAHA (e.g. http://app-api:4000/waha/webhook).
+// Set di env agar setiap session (termasuk NEW) dapat kirim event message ke API.
+const WAHA_WEBHOOK_URL = process.env.WAHA_WEBHOOK_URL || 'http://localhost:4000/waha/webhook';
+
+function buildWahaSessionConfig(overrides?: { noweb?: any }) {
+  const base: any = {
+    noweb: {
+      store: { enabled: true, fullSync: true },
+    },
+    ...overrides,
+  };
+  if (WAHA_WEBHOOK_URL) {
+    base.webhooks = [
+      { url: WAHA_WEBHOOK_URL, events: ['message', 'message.any', 'message.ack'] },
+    ];
+  }
+  return base;
+}
+
 app.post('/waha/sessions/:session/start', requireAuth, async (req, res) => {
   try {
-    const config = {
-      noweb: {
-        store: {
-          enabled: true,
-          fullSync: true,
-        },
-      },
-    };
+    const config = buildWahaSessionConfig();
     const data = await wahaStartSession(String(req.params.session), config);
     return res.json({ ok: true, data });
   } catch (e: any) {
@@ -311,15 +323,10 @@ function ensureWa12PresetSessions() {
     createdCount += 1;
     upserted.push(created);
 
-    // Auto-start session with NOWEB store enabled
-    const nowebConfig = {
-      noweb: {
-        store: {
-          enabled: true,
-          full_sync: true,
-        },
-      },
-    };
+    // Auto-start session with NOWEB store + webhook agar incoming message trigger API
+    const nowebConfig = buildWahaSessionConfig({
+      noweb: { store: { enabled: true, full_sync: true } },
+    });
 
     // Fire and forget start
     wahaStartSession(item.name, nowebConfig)
