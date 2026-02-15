@@ -1660,6 +1660,13 @@ app.post('/waha/webhook', async (req, res) => {
         return res.status(200).json({ ok: true, ignored: true });
       }
 
+      // Throttle: jika tidak ada message id (WAHA kadang kirim 2 event untuk 1 pesan), hindari double reply.
+      const lastMsgAt = progress.lastMessageAt ? new Date(progress.lastMessageAt).getTime() : 0;
+      if (!inboundMessageId && lastMsgAt && Date.now() - lastMsgAt < 30_000) {
+        debug('ignored:throttle_no_message_id', { session, chatId, lastMessageAt: progress.lastMessageAt });
+        return res.status(200).json({ ok: true, ignored: true });
+      }
+
       const parity = config.scriptLineParity || 'odd';
 
       // Dynamic Script Logic for NEW sessions:
@@ -1704,6 +1711,15 @@ app.post('/waha/webhook', async (req, res) => {
       }
 
       if ((config.cluster || 'old') === 'new') {
+        // Claim pesan ini dulu agar webhook duplikat (message + message.any) tidak kirim balas kedua.
+        if (inboundMessageId) {
+          db.setChatProgress(config.wahaSession, String(chatId), {
+            ...progress,
+            lastInboundMessageId: String(inboundMessageId),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+
         const delayMs = 15000 + Math.floor(Math.random() * 20000); // 15-35s
         console.log(`⏳ [Reactive] ${config.wahaSession} waiting ${Math.round(delayMs / 1000)}s before replying to ${chatId}...`);
 
@@ -1742,7 +1758,30 @@ app.post('/waha/webhook', async (req, res) => {
     }
 
     const replyText = config.autoReplyText || 'Terima kasih, pesan Anda sudah kami terima.';
-    // Tetap balas untuk non-text messages juga.
+    // Dedup static reply: hindari double kirim saat WAHA kirim 2 event untuk 1 pesan.
+    const staticProgress = db.getChatProgress(config.wahaSession, String(chatId)) ?? {
+      seasonIndex: 0,
+      lineIndex: 0,
+      updatedAt: new Date().toISOString(),
+    };
+    if (inboundMessageId && staticProgress.lastInboundMessageId === String(inboundMessageId)) {
+      debug('ignored:duplicate_inbound_static', { session, chatId, inboundMessageId });
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+    const staticLastAt = staticProgress.lastMessageAt ? new Date(staticProgress.lastMessageAt).getTime() : 0;
+    if (!inboundMessageId && staticLastAt && Date.now() - staticLastAt < 30_000) {
+      debug('ignored:throttle_static', { session, chatId });
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+    if (inboundMessageId) {
+      db.setChatProgress(config.wahaSession, String(chatId), {
+        seasonIndex: staticProgress.seasonIndex,
+        lineIndex: staticProgress.lineIndex,
+        lastInboundMessageId: String(inboundMessageId),
+        lastMessageAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
     await sendTextQueued({ session: config.wahaSession, chatId: String(chatId), text: replyText });
     debug('sent:static', { session, chatId, preview: String(replyText || '').slice(0, 40) });
     return res.status(200).json({ ok: true });
