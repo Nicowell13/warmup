@@ -1647,11 +1647,16 @@ app.post('/waha/webhook', async (req, res) => {
 
       // NEW sessions should only participate in conversations with OLD sessions.
       // Block only if: no mapping for this chatId, or mapped session is not an OLD-style name.
+      // DISABLED VALIDATION:
+      // We want NEW sessions to reply to ANYONE for now, to ensure auto-replies are working.
+      // The strict "must be OLD session" check was causing issues when mapping was incomplete.
+      /*
       if (!inboundSessionName || !/^old[-_]?\d+$/i.test(inboundSessionName)) {
         console.log(`   ⛔ Ignored: Sender is not a known OLD session (map empty or name not old-style).`);
         debug('ignored:new_inbound_not_old', { session, chatId, inboundSessionName });
         return res.status(200).json({ ok: true, ignored: true });
       }
+      */
 
       // Only enforce pairing when talking to known OLD sessions.
       const existingPair = db.getNewPairedOldChatId(config.wahaSession);
