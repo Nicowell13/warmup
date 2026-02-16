@@ -1564,6 +1564,8 @@ app.post('/waha/webhook', async (req, res) => {
     const chatId =
       body.chatId ||
       body?.payload?.chatId ||
+      body?.payload?.from ||
+      body?.payload?.key?.remoteJid ||
       body?.from ||
       msg?.chatId ||
       msg?.from ||
