@@ -1706,16 +1706,18 @@ app.post('/waha/webhook', async (req, res) => {
       }
       */
 
-      // Only enforce pairing when talking to known OLD sessions.
-      const existingPair = db.getNewPairedOldChatId(config.wahaSession);
-      if (!existingPair) {
-        db.setNewPairedOldChatId(config.wahaSession, String(chatId));
-        debug('paired:new_first_contact', { session, chatId, inboundSessionName });
-        console.log(`   🤝 Paired ${config.wahaSession} with ${inboundSessionName} (${chatId})`);
-      } else if (String(chatId) !== String(existingPair)) {
-        console.log(`   ⛔ Ignored: Paired with different OLD session (${existingPair}).`);
-        debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
-        return res.status(200).json({ ok: true, ignored: true });
+      // Only enforce pairing for NEW sessions when talking to known OLD sessions.
+      if ((config.cluster || 'old') === 'new') {
+        const existingPair = db.getNewPairedOldChatId(config.wahaSession);
+        if (!existingPair) {
+          db.setNewPairedOldChatId(config.wahaSession, String(chatId));
+          debug('paired:new_first_contact', { session, chatId, inboundSessionName });
+          console.log(`   🤝 Paired ${config.wahaSession} with ${inboundSessionName} (${chatId})`);
+        } else if (String(chatId) !== String(existingPair)) {
+          console.log(`   ⛔ Ignored: Paired with different OLD session (${existingPair}).`);
+          debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
+          return res.status(200).json({ ok: true, ignored: true });
+        }
       }
     }
 
