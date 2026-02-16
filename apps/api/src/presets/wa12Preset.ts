@@ -53,106 +53,45 @@ export const WA12_PRESET: Wa12Preset = {
     'new-10': 98,
   },
   scriptText: `Eh, kamu akhir-akhir ini sibuk nggak?
-Lumayan, tapi masih bisa santai.
-Kerjaannya lagi banyak?
-Iya, tapi pelan-pelan dikejar.
-Yang penting nggak stres ya.
-Betul, jaga ritme.
-Kamu biasanya ngilangin capek gimana?
-Denger musik atau jalan sebentar.
-Musik genre apa?
-Pop santai atau acoustic.
-Aku juga suka yang begitu.
-Bikin pikiran adem.
-Kadang playlist bisa ngaruh banget.
-Iya, mood langsung naik.
-Kalau pagi kamu lebih suka hening atau musik?
-Lebih ke hening dulu.
-Biar fokus ya.
-Iya, baru nyala pelan.
-Ngomong-ngomong sarapan tadi apa?
-Roti sama kopi.
-Simple tapi cukup.
-Yang penting ngisi energi.
-Kamu?
-Nasi dan telur.
-Klasik tapi aman.
-Hehe betul.
-Siang nanti rencana makan apa?
-Belum tau, lihat nanti.
-Kadang spontan lebih enak.
-Setuju sih.
-Eh, kamu lebih suka kerja pagi atau malam?
-Pagi.
-Aku justru malam.
-Menarik juga bedanya.
-Yang penting produktif.
-Benar.
-Kalau weekend biasanya ngapain?
-Istirahat dan beberes.
-Aku juga gitu.
-Kadang cuma di rumah.
-Itu juga recharge.
-Setuju.
-Eh, kamu suka nonton film atau series?
-Lebih sering series.
-Kenapa?
-Lebih nyantol ceritanya.
-Aku juga ngerasa gitu.
-Bisa lebih kenal karakter.
-Genre favorit apa?
-Drama ringan.
-Kalau aku komedi.
-Biar nggak berat.
-Iya, buat hiburan.
-Kadang ketawa kecil udah cukup.
-Bener.
-Kamu nonton sendirian atau bareng?
-Biasanya sendirian.
-Aku kadang bareng temen.
-Seru juga ya.
-Iya, bisa diskusi.
-Ngomong-ngomong, kamu suka kopi atau teh?
-Kopi.
-Hitam atau susu?
-Kadang hitam, kadang susu.
-Fleksibel ya.
-Iya tergantung mood.
-Kalau aku teh.
-Teh hangat enak sih.
-Apalagi sore hari.
-Setuju.
-Eh, kamu tipe orang yang teratur atau santai?
-Lebih ke teratur.
-Aku agak santai.
-Saling melengkapi sih.
-Hehe bisa jadi.
-Kalau rencana biasanya detail?
-Lumayan.
-Aku lebih garis besar.
-Yang penting jalan.
-Betul.
-Kamu suka nulis catatan?
-Kadang.
-Pakai apa?
-Notes di HP.
-Praktis ya.
-Iya.
-Aku juga begitu.
-Lebih gampang.
-Eh, kamu sering olahraga nggak?
-Nggak rutin.
-Aku juga sama.
-Tapi pengin mulai.
-Pelan-pelan aja.
-Iya, jangan dipaksa.
-Jalan pagi oke sih.
-Setuju.
-Kalau hujan biasanya ngapain?
-Di rumah aja.
-Nonton atau baca.
-Aku juga.
-Hujan bikin mager.
+Iya, efek visualnya keren.
+Nanti weekend deh coba nonton.
+Ajak temen-temen biar seru.
+Tiket sekarang mahal gak sih?
+Lumayan, tapi worth it kok.
+Selain nonton hobi apa?
+Baca novel fiksi.
+Seru tuh imajinasi jalan.
+Iya, bisa lupa waktu.
+Penulis favorit siapa?
+Tere Liye lumayan suka.
+Karya-karyanya emang bagus.
+Punya koleksi bukunya?
+Ada beberapa di rak.
+Pinjem dong kapan-kapan.
+Boleh, main aja ke rumah.
+Siap.
+Eh, kamu suka denger podcast gak?
+Suka, pas lagi di jalan.
+Topik apa biasanya?
+Comedy atau interview inspiratif.
+Enak ya buat nemenin macet.
+Banget, jadi gak kerasa.
+Ada rekomendasi channel?
+Coba dengerin yang lokal aja, banyak yang lucu.
+Oke nanti dicari.
+Kalau musik suka streaming di mana?
+Spotify dong.
+Premium gak?
+Iya, biar bebas iklan.
+Penting itu, iklan kadang ganggu mood.
+Bener banget pas lagi asik nyanyi eh iklan.
+Haha iya.
+Kamu suka karaoke?
+Suka tapi malu-malu.
+Ah santai aja, yang penting hepi.
+Iya sih, lepaskan beban.
+Kapan-kapan karaokean yuk.
+Gasss!
 Tapi adem.
 Iya enak.
 Eh, kamu lebih suka chatting atau telepon?

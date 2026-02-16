@@ -433,6 +433,21 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
   const oldIndexByName: Record<string, number> = {};
   for (let i = 0; i < oldSessions.length; i++) oldIndexByName[oldSessions[i].wahaSession] = i;
 
+  // Log which OLD sessions are used vs excluded (so user knows why only some are "active")
+  const usedOldNames = oldSessions.map((s) => s.wahaSession);
+  console.log(`✅ OLD sessions dipakai campaign (${usedOldNames.length}): ${usedOldNames.join(', ') || '(none)'}`);
+  for (const name of requestedOldSessionNames) {
+    if (usedOldNames.includes(name)) continue;
+    const session = db.getSessionByName(name);
+    let reason: string;
+    if (!session) reason = 'tidak ada di database';
+    else if (session.cluster !== 'old') reason = 'bukan cluster old';
+    else if (!connectedSessionNames.includes(name)) reason = 'tidak terhubung di WAHA / tidak ada chatId (pastikan session scan QR & punya nomor)';
+    else if (!(session.autoReplyScriptText || '').trim().length) reason = 'script kosong (isi Auto-reply script di pengaturan session)';
+    else reason = 'tidak memenuhi filter';
+    console.warn(`⚠️ OLD session dikecualikan: ${name} → ${reason}`);
+  }
+
   if (oldSessions.length === 0) {
     return res.status(400).json({ error: 'Tidak ada session OLD siap dipakai untuk campaign.' });
   }
