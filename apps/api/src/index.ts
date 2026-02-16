@@ -13,6 +13,11 @@ import { startScheduler } from './scheduler.js';
 import { WA12_PRESET } from './presets/wa12Preset.js';
 import { sendTextQueued } from './sendQueue.js';
 
+// Global declaration for pending replies lock
+declare global {
+  var pendingReplies: Set<string> | undefined;
+}
+
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
@@ -1620,7 +1625,8 @@ app.post('/waha/webhook', async (req, res) => {
 
     // Ignore Group Messages (User Request)
     // Legacy groups often use '-' in ID, new groups use '@g.us'
-    if (String(chatId).endsWith('@g.us') || String(chatId).includes('-')) {
+    // Relaxed: Removing '-' check to avoid false positives on new numbers
+    if (String(chatId).endsWith('@g.us')) {
       return res.status(200).json({ ok: true, ignored: true, reason: 'group' });
     }
 
@@ -1775,6 +1781,18 @@ app.post('/waha/webhook', async (req, res) => {
       }
 
       if ((config.cluster || 'old') === 'new') {
+        // Prevent concurrent replies to same chat (Imbalance Fix)
+        const replyKey = `${config.wahaSession}:${chatId}`;
+        // Simple in-memory lock map (defined at module level or attached to config, but module level is easier here)
+        // We use a global map for this:
+        if (global.pendingReplies?.has(replyKey)) {
+          console.log(`   ⏳ [Reactive] Reply already pending for ${replyKey}, skipping concurrent message.`);
+          return res.status(200).json({ ok: true, ignored: true, reason: 'pending_reply' });
+        }
+
+        if (!global.pendingReplies) global.pendingReplies = new Set();
+        global.pendingReplies.add(replyKey);
+
         // Claim pesan ini dulu agar webhook duplikat (message + message.any) tidak kirim balas kedua.
         if (inboundMessageId) {
           db.setChatProgress(config.wahaSession, String(chatId), {
@@ -1789,6 +1807,9 @@ app.post('/waha/webhook', async (req, res) => {
 
         // Wait non-blocking
         await new Promise(resolve => setTimeout(resolve, delayMs));
+
+        // Remove lock just before sending (or after, but before is safer to allow next cycle)
+        global.pendingReplies.delete(replyKey);
 
         try {
           // Direct send, bypassing shared worker queue
