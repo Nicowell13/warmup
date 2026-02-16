@@ -681,12 +681,28 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         if (!oldChatId) continue;
 
         for (const newChatId of orderedTargets) {
+          // Validation: Prevent self-messaging and ensure valid target
+          if (!newChatId || newChatId === oldChatId) {
+            console.log(`   ⚠️ Skipped invalid/self target: ${oldSessionName} -> ${newChatId}`);
+            continue;
+          }
+          // Ensure target is a personal JID (to avoid group/broadcast JIDs)
+          if (!newChatId.endsWith('@c.us')) {
+            console.log(`   ⚠️ Skipped non-personal JID: ${newChatId}`);
+            continue;
+          }
+
           const newSessionName =
             newChatIdToNewSession[newChatId] ||
-            newSessionFallbackMap[newChatId] ||
-            newSessions[0]?.wahaSession;
+            newSessionFallbackMap[newChatId];
 
-          if (!newSessionName) continue;
+          if (!newSessionName) {
+            console.log(`   ❌ No session mapping found for target ${newChatId} (skipping)`);
+            continue;
+          }
+
+          // Debug log to verify correct pairing
+          // console.log(`   🔍 Pair Debug: OLD=${oldSessionName} (${oldChatId}) -> NEW=${newSessionName} (${newChatId})`);
 
           allPairs.push({
             oldSessionName,
@@ -1556,10 +1572,12 @@ app.post('/waha/webhook', async (req, res) => {
       body?.payload?.instanceId;
 
     const fromMe =
-      body.fromMe ??
-      body?.payload?.fromMe ??
-      key?.fromMe ??
-      msg?.fromMe;
+      (body.fromMe ??
+        body?.payload?.fromMe ??
+        body?.payload?.key?.fromMe ??
+        key?.fromMe ??
+        msg?.fromMe) ||
+      false;
 
     const chatId =
       body.chatId ||
@@ -1598,6 +1616,11 @@ app.post('/waha/webhook', async (req, res) => {
     if (!session || !chatId) {
       debug('ignored:missing_session_or_chatId', { session, chatId, keys: Object.keys(body || {}) });
       return res.status(200).json({ ok: true, ignored: true });
+    }
+
+    // Explicitly check for ack events or status updates which are usually 'from me' or system
+    if (body.event === 'message.ack' || body.event === 'message.revoked') {
+      return res.status(200).json({ ok: true, ignored: true, reason: body.event });
     }
 
     if (fromMe) {
