@@ -685,7 +685,18 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
         const oldChatId = oldSessionChatIds[oldSessionName];
         if (!oldChatId) continue;
 
-        for (const newChatId of orderedTargets) {
+        for (let rawNewChatId of orderedTargets) {
+          // Standardize JID (append @c.us if missing and numeric)
+          let newChatId = String(rawNewChatId);
+          if (!newChatId.endsWith('@c.us') && !newChatId.endsWith('@g.us')) {
+            if (/^\d+$/.test(newChatId)) {
+              newChatId = `${newChatId}@c.us`;
+            } else {
+              console.log(`   ⚠️ Skipped invalid JID format: ${newChatId}`);
+              continue;
+            }
+          }
+
           // Validation: Prevent self-messaging and ensure valid target
           if (!newChatId || newChatId === oldChatId) {
             console.log(`   ⚠️ Skipped invalid/self target: ${oldSessionName} -> ${newChatId}`);
