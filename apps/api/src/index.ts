@@ -1813,26 +1813,46 @@ app.post('/waha/webhook', async (req, res) => {
           });
         }
 
-        const delayMs = 15000 + Math.floor(Math.random() * 20000); // 15-35s
-        console.log(`⏳ [Reactive] ${config.wahaSession} waiting ${Math.round(delayMs / 1000)}s before replying to ${chatId}...`);
+        // Run in background (Fire-and-forget) to avoid blocking Webhook response
+        (async () => {
+          const delayMs = 15000 + Math.floor(Math.random() * 20000); // 15-35s
+          console.log(`⏳ [Reactive] ${config.wahaSession} waiting ${Math.round(delayMs / 1000)}s before replying to ${chatId}...`);
 
-        // Wait non-blocking
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+          // Wait non-blocking
+          await new Promise(resolve => setTimeout(resolve, delayMs));
 
-        // Remove lock just before sending (or after, but before is safer to allow next cycle)
-        global.pendingReplies.delete(replyKey);
+          // Remove lock just before sending
+          global.pendingReplies?.delete(replyKey);
 
-        try {
-          // Direct send, bypassing shared worker queue
-          await wahaSendText({
-            session: config.wahaSession,
-            chatId: String(chatId),
-            text: picked.text,
-          });
-          console.log(`🚀 [Reactive] ${config.wahaSession} sent reply to ${chatId}`);
-        } catch (err: any) {
-          console.error(`❌ [Reactive] Failed to send reply from ${config.wahaSession}:`, err.message);
-        }
+          try {
+            // Direct send, bypassing shared worker queue
+            await wahaSendText({
+              session: config.wahaSession,
+              chatId: String(chatId),
+              text: picked.text,
+            });
+            console.log(`🚀 [Reactive] ${config.wahaSession} sent reply to ${chatId}`);
+
+            // Update progress AFTER send to ensure accurate accounting
+            const newMessageCount = (progress.messageCount || 0) + 2;
+            db.setChatProgress(config.wahaSession, String(chatId), {
+              seasonIndex: picked.nextSeasonIndex,
+              lineIndex: picked.nextLineIndex,
+              messageCount: newMessageCount,
+              lastInboundMessageId: inboundMessageId ? String(inboundMessageId) : progress.lastInboundMessageId,
+              lastMessageAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            });
+
+            debug('sent:script', { session, chatId, preview: String(picked.text || '').slice(0, 40), messageCount: newMessageCount });
+
+          } catch (err: any) {
+            console.error(`❌ [Reactive] Failed to send reply from ${config.wahaSession}:`, err.message);
+            global.pendingReplies?.delete(replyKey); // Ensure lock is released even on error
+          }
+        })();
+
+        return res.status(200).json({ ok: true, status: 'queued_reactive' });
       } else {
         await sendTextQueued({ session: config.wahaSession, chatId: String(chatId), text: picked.text });
       }
