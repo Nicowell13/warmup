@@ -1618,6 +1618,12 @@ app.post('/waha/webhook', async (req, res) => {
       return res.status(200).json({ ok: true, ignored: true });
     }
 
+    // Ignore Group Messages (User Request)
+    // Legacy groups often use '-' in ID, new groups use '@g.us'
+    if (String(chatId).endsWith('@g.us') || String(chatId).includes('-')) {
+      return res.status(200).json({ ok: true, ignored: true, reason: 'group' });
+    }
+
     // Explicitly check for ack events or status updates which are usually 'from me' or system
     if (body.event === 'message.ack' || body.event === 'message.revoked') {
       return res.status(200).json({ ok: true, ignored: true, reason: body.event });
