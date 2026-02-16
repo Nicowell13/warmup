@@ -1714,9 +1714,16 @@ app.post('/waha/webhook', async (req, res) => {
           debug('paired:new_first_contact', { session, chatId, inboundSessionName });
           console.log(`   🤝 Paired ${config.wahaSession} with ${inboundSessionName} (${chatId})`);
         } else if (String(chatId) !== String(existingPair)) {
-          console.log(`   ⛔ Ignored: Paired with different OLD session (${existingPair}).`);
-          debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
-          return res.status(200).json({ ok: true, ignored: true });
+          // DISABLED FOR ALL-TO-ALL CAMPAIGN:
+          // In All-to-All, a NEW session receives messages from MULTIPLE OLD sessions.
+          // Enforcing 1-to-1 pairing here causes valid messages from other OLD sessions to be ignored.
+          // Since we already validate 'inboundIsOld' (if needed) or trust the campaign flow, we can allow this.
+
+          // console.log(`   ⛔ Ignored: Paired with different OLD session (${existingPair}).`);
+          // debug('ignored:new_not_paired_old', { session, chatId, inboundSessionName, pairedOldChatId: existingPair });
+          // return res.status(200).json({ ok: true, ignored: true });
+
+          console.log(`   ⚠️ Allowing multi-pair: ${config.wahaSession} talks to ${inboundSessionName} (already paired with ${existingPair})`);
         }
       }
     }
