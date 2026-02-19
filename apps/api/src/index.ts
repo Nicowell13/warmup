@@ -735,7 +735,20 @@ app.post('/presets/wa12/run', requireAuth, async (req, res) => {
       // Re-calculated: We only schedule OLD -> NEW tasks. NEW -> OLD is via Webhook (Reactive).
       // So tasks count is halved relative to total interactions.
       const totalTasksCampaign = allPairs.length * MESSAGES_PER_WAVE; // Only OLD -> NEW scheduled
-      const totalWindowSecondsCampaign = Math.max(1, TOTAL_WINDOWS * windowMinutesPerDay * 60);
+
+      // Feature: Target Duration (override window size for pacing)
+      // IF targetDurationHours is provided, use that as the base duration for pacing.
+      // ELSE use the window size (total active hours in the schedule).
+      const targetDurationHours = Number(req.body?.targetDurationHours);
+      let totalWindowSecondsCampaign: number;
+
+      if (targetDurationHours > 0) {
+        totalWindowSecondsCampaign = targetDurationHours * 3600 * TOTAL_WINDOWS;
+        console.log(`⏱️ Pacing override: using ${targetDurationHours}h duration (ignoring window size for delay calc)`);
+      } else {
+        totalWindowSecondsCampaign = Math.max(1, TOTAL_WINDOWS * windowMinutesPerDay * 60);
+      }
+
       const delayBetweenTasksSeconds = Math.max(
         1,
         Math.floor((totalWindowSecondsCampaign / Math.max(1, totalTasksCampaign)) * 0.85)

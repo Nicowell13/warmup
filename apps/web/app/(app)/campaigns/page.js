@@ -115,6 +115,8 @@ export default function CampaignsPage() {
     }
   }, [oldSessionsText]);
 
+  const [run24Hours, setRun24Hours] = useState(false);
+
   async function startCampaign() {
     setRunning(true);
     setError('');
@@ -133,10 +135,27 @@ export default function CampaignsPage() {
         .map((s) => s.trim())
         .filter(Boolean);
 
+      // Payload builder
+      const payload = {
+        newChatIds,
+        oldSessionNames,
+      };
+
+      if (run24Hours) {
+        // Override for 24-hour mode
+        payload.windowStart = '00:00';
+        payload.windowEnd = '23:59';
+        payload.targetDurationHours = 12; // Force 12h pacing
+      } else {
+        // Use defaults or handle window inputs if we added them (currently using Preset defaults on backend if omitted)
+        // If user wants custom window in UI later, we can add inputs here.
+        payload.targetDurationHours = null;
+      }
+
       const data = await apiFetch('/presets/wa12/run', {
         token: getToken(),
         method: 'POST',
-        body: { newChatIds, oldSessionNames },
+        body: payload,
       });
       setResult(data);
 
@@ -250,6 +269,19 @@ export default function CampaignsPage() {
             rows={7}
             placeholder="62812xxxx@c.us\n62813yyyy@c.us"
           />
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="run24Hours"
+              checked={run24Hours}
+              onChange={(e) => setRun24Hours(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900"
+            />
+            <label htmlFor="run24Hours" className="text-sm font-medium text-gray-700">
+              Run 24 Hours (No Window Limit) — Pacing tetap 12 jam
+            </label>
+          </div>
 
           <div className="flex flex-wrap items-center gap-3">
             <button

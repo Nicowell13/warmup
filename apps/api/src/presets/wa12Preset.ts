@@ -206,7 +206,7 @@ Enjoy desert safari-nya, pasti nagih!`,
     day3MessagesPerNew: 42,
   },
   scripts: {
-    'old-1': `Eh, kamu akhir-akhir ini sibuk nggak?
+    'old-2': `Eh, kamu akhir-akhir ini sibuk nggak?
 Lumayan, tapi masih bisa santai.
 Kerjaannya lagi banyak?
 Iya, tapi pelan-pelan dikejar.
@@ -392,7 +392,7 @@ Thanks udah ngobrol.
 Sama-sama.
 Nanti lanjut lagi.
 Siap.`,
-    'old-2': `Eh, liburan akhir tahun ada rencana ke mana?
+    'old-1': `Eh, liburan akhir tahun ada rencana ke mana?
 Belum tahu nih, masih nabung.
 Sama, pengennya sih ke pantai.
 Pantai mana yang asik?
